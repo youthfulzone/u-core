@@ -5,7 +5,7 @@ console.log('🔌 ANAF Cookie Helper extension loaded');
 
 // Create a global API that the web app can use
 window.anafCookieHelper = {
-    version: '1.0',
+    version: '1.0.2',
     isExtensionActive: true,
     
     // Get ANAF cookies - returns a Promise
@@ -136,7 +136,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Notify the page that the extension is ready
         window.dispatchEvent(new CustomEvent('anaf-extension-ready', {
             detail: {
-                version: '1.0',
+                version: '1.0.2',
                 timestamp: new Date().toISOString()
             }
         }));
@@ -147,7 +147,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Notify the page that the extension API is available
 window.dispatchEvent(new CustomEvent('anaf-extension-loaded', {
     detail: {
-        version: '1.0',
+        version: '1.0.2',
         api: 'window.anafCookieHelper',
         timestamp: new Date().toISOString()
     }
