@@ -135,7 +135,7 @@ async function syncCookiesToApp() {
   }
 }
 
-// Message handler for popup communication
+// Message handler for popup and content script communication
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'syncCookies') {
     syncCookiesToApp().then(() => {
@@ -147,11 +147,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   if (request.action === 'getCookies') {
-    getAllANAFCookies().then(cookies => {
-      sendResponse({cookies: cookies});
-    }).catch(error => {
-      sendResponse({error: error.message});
-    });
+    // Handle requests from content script for cookies
+    if (request.domain === 'webserviced.anaf.ro') {
+      getAllANAFCookies().then(cookies => {
+        // Convert array to object format for easier use
+        const cookieObj = {};
+        cookies.forEach(cookie => {
+          cookieObj[cookie.name] = cookie.value;
+        });
+        sendResponse({success: true, cookies: cookieObj});
+      }).catch(error => {
+        sendResponse({success: false, error: error.message});
+      });
+    } else {
+      // Legacy format for popup
+      getAllANAFCookies().then(cookies => {
+        sendResponse({cookies: cookies});
+      }).catch(error => {
+        sendResponse({error: error.message});
+      });
+    }
     return true;
   }
   

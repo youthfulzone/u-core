@@ -141,7 +141,8 @@
       "Bash(git init:*)",
       "Bash(gh repo create:*)",
       "Bash(git remote add:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git push:*)"
     ],
     "defaultMode": "acceptEdits"
   },

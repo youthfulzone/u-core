@@ -90,49 +90,63 @@ export default function SpvIndex({
     // Extension detection and monitoring
     useEffect(() => {
         const detectExtension = () => {
-            // Check for ANAF Cookie Helper extension
-            if (typeof chrome !== 'undefined' && chrome.runtime) {
-                try {
-                    // Try to detect if the extension is available
-                    const extensionId = 'anaf-cookie-helper' // You may need to adjust this
-                    
-                    // Alternative: Check for extension-specific events or storage
-                    window.addEventListener('anaf-extension-ready', (event: any) => {
-                        console.log('ANAF Cookie Helper extension detected!')
-                        setExtensionAvailable(true)
-                        setExtensionLastSync(event.detail?.lastSync || null)
-                    })
-                    
-                    // Trigger extension detection
-                    window.dispatchEvent(new CustomEvent('check-anaf-extension'))
-                } catch (error) {
-                    console.log('Extension detection failed:', error)
-                }
+            // Check for extension API directly
+            if (window.anafCookieHelper) {
+                console.log('🔌 ANAF Cookie Helper extension API detected!')
+                setExtensionAvailable(true)
+                setExtensionLastSync(new Date().toISOString())
+                return
             }
             
-            // Check for extension-stored data
-            try {
-                const storedExtensionData = localStorage.getItem('anaf-extension-status')
-                if (storedExtensionData) {
-                    const data = JSON.parse(storedExtensionData)
+            // Listen for extension load event
+            const handleExtensionLoaded = (event: any) => {
+                console.log('🔌 ANAF Cookie Helper extension loaded!', event.detail)
+                setExtensionAvailable(true)
+                setExtensionLastSync(event.detail?.timestamp || new Date().toISOString())
+            }
+            
+            const handleCookiesSynced = (event: any) => {
+                console.log('✅ Cookies synced by extension!', event.detail)
+                setExtensionLastSync(new Date().toISOString())
+            }
+            
+            window.addEventListener('anaf-extension-loaded', handleExtensionLoaded)
+            window.addEventListener('anaf-cookies-synced', handleCookiesSynced)
+            
+            // Check again after a short delay in case extension loads after this component
+            setTimeout(() => {
+                if (window.anafCookieHelper && !extensionAvailable) {
+                    console.log('🔌 Extension API found on second check')
                     setExtensionAvailable(true)
-                    setExtensionLastSync(data.lastSync)
+                    setExtensionLastSync(new Date().toISOString())
                 }
-            } catch (error) {
-                console.log('Extension storage check failed:', error)
+            }, 1000)
+            
+            return () => {
+                window.removeEventListener('anaf-extension-loaded', handleExtensionLoaded)
+                window.removeEventListener('anaf-cookies-synced', handleCookiesSynced)
             }
         }
 
-        detectExtension()
+        const cleanup = detectExtension()
 
         // Monitor for extension activity
         const monitorExtension = setInterval(() => {
+            // Check if extension API is available
+            if (window.anafCookieHelper && !extensionAvailable) {
+                setExtensionAvailable(true)
+                setExtensionLastSync(new Date().toISOString())
+            }
+            
             // Check session status to see if extension has provided cookies
             fetch('/api/anaf/session/status')
                 .then(response => response.json())
                 .then(data => {
-                    if (data.success && data.session.active && data.session.source === 'extension') {
-                        setExtensionAvailable(true)
+                    if (data.success && data.session.active && 
+                        (data.session.source === 'extension' || data.session.source === 'extension_api')) {
+                        if (!extensionAvailable) {
+                            setExtensionAvailable(true)
+                        }
                         setExtensionLastSync(new Date().toISOString())
                     }
                 })
@@ -141,8 +155,11 @@ export default function SpvIndex({
                 })
         }, 30000) // Check every 30 seconds
 
-        return () => clearInterval(monitorExtension)
-    }, [])
+        return () => {
+            cleanup?.()
+            clearInterval(monitorExtension)
+        }
+    }, [extensionAvailable])
 
     // No longer needed - simplified to use only browser session authentication
 
@@ -184,51 +201,97 @@ export default function SpvIndex({
         
         try {
             setLoading(true)
-            setSyncMessage('🔄 Syncing messages...')
+            setSyncMessage('🔄 Checking for ANAF cookies...')
             
-            // Use the direct controller route that we know works
-            const response = await fetch('/spv/sync-messages', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
-                },
-                body: JSON.stringify({
-                    days: syncDays,
-                    cif: syncCif || undefined
-                })
-            })
-            
-            const result = await response.json()
-            
-            if (response.ok && result.success) {
-                setSyncMessage(`✅ Success! Synced ${result.synced_count} new messages (${result.total_messages} total found)`)
-                setTimeout(() => setSyncMessage(null), 5000)
-                router.reload({ only: ['messages', 'requests'] })
+            // Step 1: Try to get cookies from extension first
+            if (window.anafCookieHelper) {
+                console.log('🔌 Extension detected, trying to get cookies automatically...')
+                setSyncMessage('🔌 Extension detected! Checking for ANAF cookies...')
+                
+                const cookieResult = await window.anafCookieHelper.getCookies()
+                
+                if (cookieResult.success && Object.keys(cookieResult.cookies).length > 0) {
+                    console.log('✅ Extension: Found ANAF cookies, syncing to app...')
+                    setSyncMessage('✅ Found ANAF cookies! Syncing to application...')
+                    
+                    // Sync cookies using extension
+                    const syncResult = await window.anafCookieHelper.syncCookies()
+                    
+                    if (syncResult.success) {
+                        setSyncMessage('✅ Cookies synced! Getting messages...')
+                        
+                        // Now try to sync messages
+                        const messageResponse = await fetch('/spv/sync-messages', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/json',
+                                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+                            },
+                            body: JSON.stringify({
+                                days: syncDays,
+                                cif: syncCif || undefined
+                            })
+                        })
+                        
+                        const messageResult = await messageResponse.json()
+                        
+                        if (messageResponse.ok && messageResult.success) {
+                            setSyncMessage(`✅ Success! Synced ${messageResult.synced_count} new messages (${messageResult.total_messages} total found)`)
+                            setTimeout(() => setSyncMessage(null), 5000)
+                            router.reload({ only: ['messages', 'requests'] })
+                            return
+                        }
+                    }
+                }
+                
+                // If extension didn't work, fall through to manual authentication
+                console.log('ℹ️ Extension: No valid cookies found, requiring manual authentication')
+                setSyncMessage('🔐 No valid ANAF cookies found. Opening ANAF for authentication...')
             } else {
-                // Check if it's an authentication error
-                if (result.message && (result.message.includes('🔐') || result.message.includes('Session Expired') || result.message.includes('Authentication'))) {
-                    setSyncMessage('🔐 Authentication required. Opening ANAF for authentication...')
-                    
-                    // Open ANAF for authentication - extension will auto-capture cookies
-                    window.open('https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile=60', '_blank')
-                    
-                    setSyncMessage(`🔐 Please authenticate at ANAF in the new tab.
+                // No extension, try direct approach first
+                console.log('ℹ️ No extension detected, trying direct sync...')
+                setSyncMessage('🔄 Syncing messages...')
+                
+                const response = await fetch('/spv/sync-messages', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+                    },
+                    body: JSON.stringify({
+                        days: syncDays,
+                        cif: syncCif || undefined
+                    })
+                })
+                
+                const result = await response.json()
+                
+                if (response.ok && result.success) {
+                    setSyncMessage(`✅ Success! Synced ${result.synced_count} new messages (${result.total_messages} total found)`)
+                    setTimeout(() => setSyncMessage(null), 5000)
+                    router.reload({ only: ['messages', 'requests'] })
+                    return
+                }
+                
+                // If direct approach failed, continue to authentication
+                setSyncMessage('🔐 Authentication required. Opening ANAF for authentication...')
+            }
+            
+            // Open ANAF for authentication - extension will auto-capture cookies
+            window.open('https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile=60', '_blank')
+            
+            setSyncMessage(`🔐 Please authenticate at ANAF in the new tab.
 
-Extension will automatically:
-1. Capture your authentication cookies
-2. Sync them to this application
-3. Enable automatic message retrieval
+${window.anafCookieHelper ? 'Extension will automatically:' : 'After authentication:'}
+1. ${window.anafCookieHelper ? 'Capture your authentication cookies' : 'Use the extension to capture cookies'}
+2. ${window.anafCookieHelper ? 'Sync them to this application' : 'Or manually import session data'}
+3. ${window.anafCookieHelper ? 'Enable automatic message retrieval' : 'Then sync messages'}
 
 Once authenticated, click "Sync Messages" again.`)
-                    
-                    setTimeout(() => setSyncMessage(null), 15000)
-                } else {
-                    setSyncMessage(`❌ Sync failed: ${result.message || 'Unknown error'}`)
-                    setTimeout(() => setSyncMessage(null), 8000)
-                }
-            }
+            
+            setTimeout(() => setSyncMessage(null), 15000)
             
         } catch (error) {
             console.error('Sync failed:', error)

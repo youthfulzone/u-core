@@ -18,6 +18,18 @@
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://u-core.test/*",
+        "http://u-core.test/*",
+        "http://localhost:*/*",
+        "http://127.0.0.1:*/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "ANAF Cookie Helper"
@@ -26,5 +38,16 @@
     "16": "icon16.png",
     "48": "icon48.png",
     "128": "icon128.png"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["content.js"],
+      "matches": [
+        "https://u-core.test/*",
+        "http://u-core.test/*",
+        "http://localhost:*/*",
+        "http://127.0.0.1:*/*"
+      ]
+    }
+  ]
 }
