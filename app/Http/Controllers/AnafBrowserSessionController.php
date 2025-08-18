@@ -37,15 +37,9 @@ class AnafBrowserSessionController extends Controller
                 ], 400);
             }
 
-            // Test the session
-            $sessionValid = $this->spvService->testSessionWithImportedCookies();
-            
-            if (!$sessionValid) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Session cookies imported but authentication failed'
-                ], 400);
-            }
+            // Skip session validation to avoid consuming API calls
+            // Session validity will be checked when actually needed (during sync)
+            Log::info('Session cookies imported successfully, skipping validation to preserve API call limit');
 
             return response()->json([
                 'success' => true,
@@ -131,10 +125,26 @@ class AnafBrowserSessionController extends Controller
      */
     public function sessionStatus()
     {
+        $sessionStatus = $this->spvService->getSessionStatus();
+        
+        // Create minimal authentication status to avoid any hidden API calls
+        $authStatus = [
+            'has_automated_auth' => false,
+            'methods' => [
+                'session_cookies' => [
+                    'available' => true,
+                    'type' => 'Session Cookies',
+                    'description' => 'Browser extension or manual session cookie import',
+                    'status' => 'Always available',
+                ]
+            ],
+            'session' => $sessionStatus,
+        ];
+        
         return response()->json([
             'success' => true,
-            'session' => $this->spvService->getSessionStatus(),
-            'authentication' => $this->spvService->getAuthenticationStatus()
+            'session' => $sessionStatus,
+            'authentication' => $authStatus
         ]);
     }
 
@@ -351,20 +361,12 @@ class AnafBrowserSessionController extends Controller
 
             // For extension source, skip session validation to avoid timeouts
             // The extension will validate the session through actual usage
-            if ($source === 'browser_extension') {
-                Log::info('Extension cookies imported successfully, skipping validation to avoid timeout');
-            } else {
-                // Test the session for manual imports
-                $sessionValid = $this->spvService->testSessionWithImportedCookies();
-                
-                if (!$sessionValid) {
-                    Log::warning('Extension cookies imported but session test failed');
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'Cookies imported but session validation failed'
-                    ], 400);
-                }
-            }
+            // Skip session validation for all sources to preserve API call limit
+            // Session validity will be checked when actually needed (during sync)
+            Log::info('Cookies imported successfully, skipping validation to preserve API call limit', [
+                'source' => $source,
+                'cookie_count' => count($cookies)
+            ]);
 
             Log::info('Extension cookies successfully imported and validated');
 

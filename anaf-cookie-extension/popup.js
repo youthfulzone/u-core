@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const syncBtn = document.getElementById('syncBtn');
     const testBtn = document.getElementById('testBtn');
     const viewBtn = document.getElementById('viewBtn');
+    const clearBtn = document.getElementById('clearBtn');
     const errorBtn = document.getElementById('errorBtn');
     const saveSettingsBtn = document.getElementById('saveSettings');
     const statusDiv = document.getElementById('status');
@@ -16,11 +17,13 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Load initial status
     updateStatus();
+    updateConnectionStatus();
     
     // Event listeners
     syncBtn.addEventListener('click', syncCookies);
     testBtn.addEventListener('click', testConnection);
     viewBtn.addEventListener('click', toggleCookieView);
+    clearBtn.addEventListener('click', clearCookies);
     errorBtn.addEventListener('click', toggleErrorDetails);
     saveSettingsBtn.addEventListener('click', saveSettings);
     
@@ -47,35 +50,57 @@ document.addEventListener('DOMContentLoaded', function() {
         testBtn.disabled = true;
         testBtn.textContent = '🧪 Testing...';
         
-        const appUrl = appUrlInput.value.trim() || 'https://u-core.test';
-        
-        // Test connection to the app
-        fetch(`${appUrl}/api/anaf/session/status`)
-            .then(response => {
-                testBtn.disabled = false;
-                testBtn.textContent = '🧪 Test Connection';
+        // Use background script's test connection method for consistency
+        chrome.runtime.sendMessage({action: 'testConnection'}, function(response) {
+            testBtn.disabled = false;
+            testBtn.textContent = '🧪 Test Connection';
+            
+            if (response && response.success) {
+                // Show detailed success message
+                let successMessage = response.message;
+                if (response.method) {
+                    successMessage += ` (via ${response.method})`;
+                }
+                showStatus(successMessage, 'success');
                 
-                if (response.ok) {
-                    return response.json().then(data => {
-                        showStatus(`✅ Connection successful! Session active: ${data.session?.active ? 'Yes' : 'No'}`, 'success');
+                // Store successful connection test
+                chrome.storage.local.set({
+                    lastConnectionTest: Date.now(),
+                    lastConnectionStatus: 'success',
+                    lastConnectionMessage: response.message,
+                    connectionMethod: response.method || 'HTTPS'
+                });
+            } else {
+                const errorMessage = response?.message || response?.error || 'Connection test failed';
+                const isSSLError = response?.errorType === 'SSL_CERTIFICATE_REQUIRED' || 
+                                 errorMessage.includes('SSL') || 
+                                 errorMessage.includes('certificate') || 
+                                 errorMessage.includes('Failed to fetch') || 
+                                 errorMessage.includes('Network Connection Failed');
+                
+                if (isSSLError) {
+                    showStatus(`⚠️ SSL Certificate Required: ${errorMessage}`, 'warning');
+                    
+                    // Store SSL error status
+                    chrome.storage.local.set({
+                        lastConnectionTest: Date.now(),
+                        lastConnectionStatus: 'ssl_error',
+                        lastConnectionMessage: errorMessage
                     });
                 } else {
-                    showStatus(`❌ Connection failed: HTTP ${response.status} - ${response.statusText}`, 'error');
+                    showStatus(`❌ Connection failed: ${errorMessage}`, 'error');
+                    
+                    // Store general error status
+                    chrome.storage.local.set({
+                        lastConnectionTest: Date.now(),
+                        lastConnectionStatus: 'error',
+                        lastConnectionMessage: errorMessage
+                    });
                 }
-            })
-            .catch(error => {
-                testBtn.disabled = false;
-                testBtn.textContent = '🧪 Test Connection';
-                
-                let errorMessage = error.message;
-                if (error.message.includes('net::ERR_CERT_AUTHORITY_INVALID')) {
-                    errorMessage = 'SSL Certificate not accepted. Please visit ' + appUrl + ' first and accept the certificate.';
-                } else if (error.message.includes('Failed to fetch')) {
-                    errorMessage = 'Cannot connect to app. Check if the Laravel app is running and the URL is correct.';
-                }
-                
-                showStatus(`❌ Connection error: ${errorMessage}`, 'error');
-            });
+            }
+            
+            updateConnectionStatus();
+        });
     }
     
     function syncCookies() {
@@ -91,6 +116,65 @@ document.addEventListener('DOMContentLoaded', function() {
                 showStatus('✅ Cookies synced successfully!', 'success');
             } else {
                 showStatus('❌ Failed to sync cookies: ' + (response?.error || 'Unknown error'), 'error');
+            }
+            
+            updateStatus();
+        });
+    }
+    
+    function clearCookies() {
+        // Show confirmation dialog
+        const confirmMessage = 'Are you sure you want to clear all ANAF cookies?\n\n' +
+                              'This will:\n' +
+                              '• Remove all webserviced.anaf.ro cookies\n' +
+                              '• Clear extension sync history\n' +
+                              '• Require re-authentication at ANAF\n\n' +
+                              'Click OK to proceed or Cancel to abort.';
+        
+        if (!confirm(confirmMessage)) {
+            return; // User cancelled
+        }
+        
+        clearBtn.disabled = true;
+        clearBtn.textContent = '🗑️ Clearing...';
+        
+        // Send message to background script to clear cookies
+        chrome.runtime.sendMessage({action: 'clearCookies'}, function(response) {
+            clearBtn.disabled = false;
+            clearBtn.textContent = '🗑️ Clear ANAF Cookies';
+            
+            if (response && response.success) {
+                const message = response.message || 'ANAF cookies cleared successfully!';
+                const detailMessage = response.clearedCount ? 
+                    `${message} (${response.clearedCount} cookies removed)` : 
+                    message;
+                
+                showStatus(`✅ ${detailMessage}`, 'success');
+                
+                // Hide cookie display if it was open since cookies are now cleared
+                if (cookieDisplay.style.display !== 'none') {
+                    cookieDisplay.style.display = 'none';
+                    viewBtn.textContent = '👁️ View Current Cookies';
+                }
+                
+                // Store successful clear operation
+                chrome.storage.local.set({
+                    lastClear: Date.now(),
+                    lastClearStatus: 'success',
+                    lastClearMessage: detailMessage,
+                    clearedCookieCount: response.clearedCount || 0
+                });
+                
+            } else {
+                const errorMessage = response?.message || response?.error || 'Unknown error';
+                showStatus(`❌ Failed to clear cookies: ${errorMessage}`, 'error');
+                
+                // Store failed clear operation
+                chrome.storage.local.set({
+                    lastClear: Date.now(),
+                    lastClearStatus: 'error',
+                    lastClearError: errorMessage
+                });
             }
             
             updateStatus();
@@ -143,6 +227,79 @@ document.addEventListener('DOMContentLoaded', function() {
         cookieDisplay.innerHTML = html;
     }
     
+    function updateConnectionStatus() {
+        chrome.storage.local.get([
+            'lastConnectionTest',
+            'lastConnectionStatus', 
+            'lastConnectionMessage'
+        ], function(result) {
+            const healthElement = document.getElementById('connectionHealth');
+            
+            if (result.lastConnectionTest) {
+                const testTime = new Date(result.lastConnectionTest).toLocaleTimeString();
+                let status, color;
+                
+                if (result.lastConnectionStatus === 'success') {
+                    status = '✅ healthy';
+                    color = '#28a745';
+                } else if (result.lastConnectionStatus === 'ssl_error') {
+                    status = '⚠️ needs SSL cert';
+                    color = '#ffc107';
+                } else {
+                    status = '❌ error';
+                    color = '#dc3545';
+                }
+                
+                healthElement.textContent = `Connection: ${status} (${testTime})`;
+                healthElement.style.color = color;
+            } else {
+                // Auto-test connection on popup load if never tested
+                healthElement.textContent = 'Connection: 🔄 testing...';
+                healthElement.style.color = '#6c757d';
+                
+                chrome.runtime.sendMessage({action: 'testConnection'}, function(response) {
+                    if (response && response.success) {
+                        healthElement.textContent = 'Connection: ✅ healthy';
+                        healthElement.style.color = '#28a745';
+                        
+                        // Store successful connection test
+                        chrome.storage.local.set({
+                            lastConnectionTest: Date.now(),
+                            lastConnectionStatus: 'success',
+                            lastConnectionMessage: response.message
+                        });
+                    } else {
+                        const isSSLError = response?.errorType === 'SSL_CERTIFICATE_REQUIRED' || 
+                                         response?.message?.includes('SSL') || 
+                                         response?.message?.includes('certificate');
+                        
+                        if (isSSLError) {
+                            healthElement.textContent = 'Connection: ⚠️ needs SSL cert';
+                            healthElement.style.color = '#ffc107';
+                            
+                            // Store SSL error status
+                            chrome.storage.local.set({
+                                lastConnectionTest: Date.now(),
+                                lastConnectionStatus: 'ssl_error',
+                                lastConnectionMessage: response?.message || 'SSL certificate needs acceptance'
+                            });
+                        } else {
+                            healthElement.textContent = 'Connection: ❌ error';
+                            healthElement.style.color = '#dc3545';
+                            
+                            // Store general error status
+                            chrome.storage.local.set({
+                                lastConnectionTest: Date.now(),
+                                lastConnectionStatus: 'error',
+                                lastConnectionMessage: response?.message || 'Connection failed'
+                            });
+                        }
+                    }
+                });
+            }
+        });
+    }
+
     function updateStatus() {
         chrome.storage.local.get([
             'lastSync', 
@@ -151,15 +308,45 @@ document.addEventListener('DOMContentLoaded', function() {
             'lastSyncMessage', 
             'cookieCount', 
             'errorCode',
-            'errorDetails'
+            'errorDetails',
+            'lastConnectionTest',
+            'lastConnectionStatus',
+            'lastConnectionMessage',
+            'lastClear',
+            'lastClearStatus',
+            'lastClearMessage',
+            'lastClearError',
+            'clearedCookieCount'
         ], function(result) {
-            if (result.lastSync) {
-                const lastSyncTime = new Date(result.lastSync).toLocaleTimeString();
+            // Determine which operation was most recent
+            const lastSyncTime = result.lastSync || 0;
+            const lastClearTime = result.lastClear || 0;
+            
+            // Show the most recent operation's status
+            if (lastClearTime > lastSyncTime && result.lastClear) {
+                // Show clear operation status
+                const clearTime = new Date(result.lastClear).toLocaleTimeString();
+                
+                if (result.lastClearStatus === 'success') {
+                    const clearInfo = result.clearedCookieCount ? ` (${result.clearedCookieCount} cookies removed)` : '';
+                    const message = result.lastClearMessage || 'ANAF cookies cleared successfully';
+                    showStatus(`🗑️ ${clearTime}: ${message}${clearInfo}`, 'success');
+                    errorBtn.style.display = 'none';
+                } else if (result.lastClearStatus === 'error') {
+                    const errorMessage = result.lastClearError || 'Failed to clear cookies';
+                    showStatus(`❌ ${clearTime}: ${errorMessage}`, 'error');
+                    errorBtn.style.display = 'none'; // Clear errors are usually simpler
+                }
+                
+            } else if (result.lastSync) {
+                // Show sync operation status
+                const syncTime = new Date(result.lastSync).toLocaleTimeString();
                 
                 if (result.lastSyncStatus === 'success') {
                     const cookieInfo = result.cookieCount ? ` (${result.cookieCount} cookies)` : '';
                     const message = result.lastSyncMessage || 'Cookies synced successfully';
-                    showStatus(`✅ ${lastSyncTime}: ${message}${cookieInfo}`, 'success');
+                    showStatus(`✅ ${syncTime}: ${message}${cookieInfo}`, 'success');
+                    errorBtn.style.display = 'none';
                 } else if (result.lastSyncStatus === 'error') {
                     let errorMessage = result.lastError || 'Unknown error';
                     
@@ -168,7 +355,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         errorMessage = `[${result.errorCode}] ${errorMessage}`;
                     }
                     
-                    showStatus(`❌ ${lastSyncTime}: ${errorMessage}`, 'error');
+                    showStatus(`❌ ${syncTime}: ${errorMessage}`, 'error');
                     
                     // Show error details button if we have detailed error info
                     if (result.errorDetails || result.lastError) {
@@ -178,7 +365,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             error: result.lastError,
                             code: result.errorCode,
                             details: result.errorDetails,
-                            timestamp: lastSyncTime
+                            timestamp: syncTime
                         };
                     } else {
                         errorBtn.style.display = 'none';
@@ -190,7 +377,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
             } else {
-                showStatus('⚠️ No sync performed yet. Click "Sync Cookies" to start.', 'warning');
+                // No operations performed yet
+                showStatus('⚠️ No operations performed yet. Click "Sync Cookies" to start.', 'warning');
                 errorBtn.style.display = 'none';
             }
         });

@@ -40,11 +40,25 @@ class SpvController extends Controller
 
         // Do not auto-create demo data - only show real ANAF data
 
-        // Get comprehensive authentication status
-        $authStatus = $this->spvService->getAuthenticationStatus();
-
-        // Get API call status
+        // Get API call status (safe - only reads from cache)
         $apiCallStatus = $this->spvService->getApiCallStatus();
+
+        // Get basic session status without triggering any API calls
+        $sessionStatus = $this->spvService->getSessionStatus();
+        
+        // Create minimal authentication status to avoid any hidden API calls
+        $authStatus = [
+            'has_automated_auth' => false,
+            'methods' => [
+                'session_cookies' => [
+                    'available' => true,
+                    'type' => 'Session Cookies',
+                    'description' => 'Browser extension or manual session cookie import',
+                    'status' => 'Always available',
+                ]
+            ],
+            'session' => $sessionStatus,
+        ];
 
         return Inertia::render('spv/Index', [
             'messages' => $messages,
@@ -520,7 +534,22 @@ class SpvController extends Controller
     public function getAuthenticationStatus(Request $request): JsonResponse
     {
         try {
-            $authStatus = $this->spvService->getAuthenticationStatus();
+            // Get basic session status without triggering any API calls
+            $sessionStatus = $this->spvService->getSessionStatus();
+            
+            // Create minimal authentication status to avoid any hidden API calls
+            $authStatus = [
+                'has_automated_auth' => false,
+                'methods' => [
+                    'session_cookies' => [
+                        'available' => true,
+                        'type' => 'Session Cookies',
+                        'description' => 'Browser extension or manual session cookie import',
+                        'status' => 'Always available',
+                    ]
+                ],
+                'session' => $sessionStatus,
+            ];
 
             return response()->json([
                 'success' => true,

@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { PlaceholderPattern } from '@/components/ui/placeholder-pattern'
 import { Icon } from '@/components/icon'
@@ -88,7 +89,9 @@ export default function SpvIndex({
 }: SpvIndexProps) {
     const [loading, setLoading] = useState(false)
     const [syncCif, setSyncCif] = useState('')
-    const [autoSynced, setAutoSynced] = useState(false)
+    const [tableFilter, setTableFilter] = useState('')
+    const [documentTypeFilter, setDocumentTypeFilter] = useState('all')
+    const [isTableUpdating, setIsTableUpdating] = useState(false)
     const [syncMessage, setSyncMessage] = useState<string | null>(null)
     const [extensionAvailable, setExtensionAvailable] = useState(false)
     const [extensionLastSync, setExtensionLastSync] = useState<string | null>(null)
@@ -96,27 +99,15 @@ export default function SpvIndex({
     const [showExtensionTest, setShowExtensionTest] = useState(false)
     const [testResults, setTestResults] = useState<any>(null)
     const [currentApiStatus, setCurrentApiStatus] = useState<ApiCallStatus | undefined>(apiCallStatus)
+    
+    // Pagination state
+    const [currentPage, setCurrentPage] = useState(1)
+    const messagesPerPage = 10
 
-    // Function to fetch updated API call status
-    const fetchApiCallStatus = async () => {
-        try {
-            const response = await fetch('/spv/api-call-status', {
-                headers: {
-                    'Accept': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
-                }
-            })
-            
-            if (response.ok) {
-                const result = await response.json()
-                if (result.success) {
-                    setCurrentApiStatus(result.data)
-                }
-            }
-        } catch (error) {
-            console.error('Failed to fetch API call status:', error)
-        }
-    }
+    // Update API call status when prop changes (after page reload)
+    useEffect(() => {
+        setCurrentApiStatus(apiCallStatus)
+    }, [apiCallStatus])
 
     // Function to reset API call counter
     const handleResetApiCounter = async () => {
@@ -166,17 +157,8 @@ export default function SpvIndex({
         return isAvailable
     }
 
-    // Auto-sync on page load if session is active and no messages exist
-    useEffect(() => {
-        if (sessionActive && messages.length === 0 && !autoSynced) {
-            console.log('Auto-syncing messages on page load...')
-            handleSyncMessages()
-            setAutoSynced(true)
-        }
-        
-        // Also fetch initial API call status
-        fetchApiCallStatus()
-    }, [sessionActive, messages.length, autoSynced])
+    // No automatic API calls on page load to preserve API requests
+    // API status will be fetched only when sync button is clicked
 
     // Extension detection and monitoring
     useEffect(() => {
@@ -265,24 +247,7 @@ export default function SpvIndex({
                 setExtensionLastSync(new Date().toISOString())
             }
             
-            // Check session status to see if extension has provided cookies
-            fetch('/api/anaf/session/status')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success && data.session.active && 
-                        (data.session.source === 'extension' || data.session.source === 'extension_api')) {
-                        if (!extensionAvailable) {
-                            setExtensionAvailable(true)
-                        }
-                        setExtensionLastSync(new Date().toISOString())
-                    }
-                })
-                .catch(error => {
-                    // Silent fail
-                })
-            
-            // Also periodically update API call status
-            fetchApiCallStatus()
+            // Extension monitoring without periodic API calls
         }, 10000) // Check every 10 seconds
 
         return () => {
@@ -383,8 +348,7 @@ export default function SpvIndex({
                     'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
                 },
                 body: JSON.stringify({
-                    days: 60,
-                    cif: syncCif || undefined
+                    days: 60
                 })
             })
             
@@ -393,9 +357,7 @@ export default function SpvIndex({
             if (response.ok && result.success) {
                 setSyncMessage(`✅ Succes! ${result.synced_count} mesaje noi sincronizate (${result.total_messages} mesaje găsite în total)`)
                 setTimeout(() => setSyncMessage(null), 5000)
-                router.reload({ only: ['messages', 'requests'] })
-                // Update API call status after successful sync
-                await fetchApiCallStatus()
+                router.reload({ only: ['messages', 'requests', 'apiCallStatus'] })
                 return
             }
             
@@ -425,8 +387,7 @@ export default function SpvIndex({
                                 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
                             },
                             body: JSON.stringify({
-                                days: 60,
-                                cif: syncCif || undefined
+                                days: 60
                             })
                         })
                         
@@ -435,9 +396,7 @@ export default function SpvIndex({
                         if (retryResponse.ok && retryResult.success) {
                             setSyncMessage(`✅ Succes! ${retryResult.synced_count} mesaje noi sincronizate (${retryResult.total_messages} mesaje găsite în total)`)
                             setTimeout(() => setSyncMessage(null), 5000)
-                            router.reload({ only: ['messages', 'requests'] })
-                            // Update API call status after successful sync
-                            await fetchApiCallStatus()
+                            router.reload({ only: ['messages', 'requests', 'apiCallStatus'] })
                             return
                         }
                     }
@@ -561,7 +520,12 @@ După autentificare, apăsați din nou "Sincronizare mesaje ANAF".`)
         const variants: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
             'RECIPISA': 'default',
             'RAPORT': 'secondary',
+            'SOMATIE': 'destructive',
+            'SOMATII': 'destructive',
+            'SOMATII/TITLURI EXECUTORII': 'destructive',
+            'TITLURI EXECUTORII': 'destructive',
             'NOTIFICARE': 'outline',
+            'NOTIFICARI': 'outline',
         }
         return variants[tip] || 'secondary'
     }
@@ -578,15 +542,42 @@ După autentificare, apăsați din nou "Sincronizare mesaje ANAF".`)
         return mockCompanies[cif] || `SC ${cif.substring(0, 4)} SRL`
     }
 
-    // Helper function to get document type display
+    // Helper function to get document type display with proper capitalization
     const getDocumentTypeDisplay = (tip: string): string => {
         const types: Record<string, string> = {
             'RECIPISA': 'Recipisă',
             'RAPORT': 'Răspuns solicitare',
             'NOTIFICARE': 'Notificare',
+            'NOTIFICARI': 'Notificări',
             'SOMATIE': 'Somație',
+            'SOMATII': 'Somații',
+            'SOMATII/TITLURI EXECUTORII': 'Somații/Titluri executorii',
+            'TITLURI EXECUTORII': 'Titluri executorii',
+            'DECIZIE': 'Decizie',
+            'DECIZII': 'Decizii',
+            'AVIZ': 'Aviz',
+            'AVIZE': 'Avize',
+            'CERERE': 'Cerere',
+            'CERERI': 'Cereri',
+            'SOLICITARE': 'Solicitare',
+            'SOLICITARI': 'Solicitări',
+            'RASPUNS': 'Răspuns',
+            'RASPUNSURI': 'Răspunsuri',
+            'FORMULAR': 'Formular',
+            'FORMULARE': 'Formulare',
+            'DOCUMENT': 'Document',
+            'DOCUMENTE': 'Documente',
         }
-        return types[tip] || tip
+        
+        // If exact match found, return it
+        if (types[tip]) {
+            return types[tip]
+        }
+        
+        // Otherwise, convert to proper case format (first letter uppercase, rest lowercase)
+        return tip.split(' ').map(word => 
+            word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+        ).join(' ')
     }
 
     // Helper function to format date in Romanian format
@@ -610,6 +601,50 @@ După autentificare, apăsați din nou "Sincronizare mesaje ANAF".`)
         }
     }
 
+    // Get unique document types for dropdown
+    const uniqueDocumentTypes = Array.from(new Set(messages.map(message => message.tip)))
+        .sort()
+        .map(tip => ({
+            value: tip,
+            label: getDocumentTypeDisplay(tip)
+        }))
+
+    // Filter messages based on CIF/company name and document type
+    const filteredMessages = messages.filter(message => {
+        // CIF/Company name filter
+        const cifMatch = tableFilter === '' || (() => {
+            const searchTerm = tableFilter.toLowerCase()
+            const cif = message.cif.toLowerCase()
+            const companyName = getCompanyName(message.cif).toLowerCase()
+            return cif.includes(searchTerm) || companyName.includes(searchTerm)
+        })()
+
+        // Document type filter
+        const typeMatch = documentTypeFilter === '' || documentTypeFilter === 'all' || message.tip === documentTypeFilter
+
+        return cifMatch && typeMatch
+    })
+
+    // Pagination calculations
+    const totalPages = Math.ceil(filteredMessages.length / messagesPerPage)
+    const startIndex = (currentPage - 1) * messagesPerPage
+    const endIndex = startIndex + messagesPerPage
+    const paginatedMessages = filteredMessages.slice(startIndex, endIndex)
+
+    // Reset to page 1 when filters change
+    useEffect(() => {
+        setCurrentPage(1)
+    }, [tableFilter, documentTypeFilter])
+
+    // Handle smooth table updates with animation
+    useEffect(() => {
+        if (tableFilter !== '' || documentTypeFilter !== 'all') {
+            setIsTableUpdating(true)
+            const timer = setTimeout(() => setIsTableUpdating(false), 150)
+            return () => clearTimeout(timer)
+        }
+    }, [tableFilter, documentTypeFilter])
+
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="SPV - Spațiul Privat Virtual ANAF" />
@@ -632,17 +667,6 @@ După autentificare, apăsați din nou "Sincronizare mesaje ANAF".`)
                     </div>
                     
                     <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-2">
-                            <Input
-                                type="text"
-                                placeholder="Filtru CIF (opțional)"
-                                value={syncCif}
-                                onChange={(e) => setSyncCif(e.target.value)}
-                                className="w-40"
-                                disabled={loading}
-                            />
-                        </div>
-                        
                         <Button
                             onClick={handleSyncMessages}
                             disabled={loading}
@@ -693,62 +717,124 @@ După autentificare, apăsați din nou "Sincronizare mesaje ANAF".`)
                 </div>
 
                 {/* Main Content Area */}
-                <div className="relative min-h-[60vh] flex-1 overflow-hidden rounded-xl border border-sidebar-border/70 md:min-h-min dark:border-sidebar-border">
-                    <div className="absolute inset-0 p-6 overflow-y-auto">
-                        <div className="space-y-6">
-                            {/* Lista mesaje ANAF */}
-                            <Card>
-                                <CardHeader>
-                                    <CardTitle>Mesaje ANAF ({messages.length})</CardTitle>
-                                    <CardDescription>
-                                        Ultimele mesaje din Spațiul Privat Virtual ANAF
-                                    </CardDescription>
-                                </CardHeader>
-                                <CardContent className="p-0">
-                                    {messages.length === 0 ? (
-                                        <div className="text-center py-12 px-6">
-                                            <Icon iconNode={Mail} className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                                            <p className="text-muted-foreground font-medium">Nu au fost găsite mesaje</p>
-                                            <p className="text-sm text-muted-foreground mt-2">
-                                                Apăsați "Sincronizare mesaje ANAF" pentru a prelua mesajele de la ANAF
-                                            </p>
-                                        </div>
-                                    ) : (
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full">
+                <div className="relative min-h-[60vh] flex-1 overflow-hidden rounded-xl border border-sidebar-border/70 md:min-h-min dark:border-sidebar-border p-6">
+                    {/* Lista mesaje ANAF */}
+                    <div className="mb-6">
+                        <h2 className="text-lg font-semibold mb-2">
+                            Mesaje ANAF ({filteredMessages.length}{messages.length !== filteredMessages.length ? ` din ${messages.length}` : ''})
+                            {totalPages > 1 && (
+                                <span className="text-sm font-normal text-muted-foreground ml-2">
+                                    - Pagina {currentPage} din {totalPages}
+                                </span>
+                            )}
+                        </h2>
+                        <p className="text-sm text-muted-foreground mb-4">
+                            Ultimele mesaje din Spațiul Privat Virtual ANAF
+                        </p>
+                    </div>
+                    
+                    <>
+                        {messages.length === 0 ? (
+                            <div className="text-center py-12">
+                                <Icon iconNode={Mail} className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                                <p className="text-muted-foreground font-medium">Nu au fost găsite mesaje</p>
+                                <p className="text-sm text-muted-foreground mt-2">
+                                    Apăsați "Sincronizare mesaje ANAF" pentru a prelua mesajele de la ANAF
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="overflow-x-auto">
+                                            <table className="w-full table-fixed">
                                                 <thead className="border-b bg-muted/50">
                                                     <tr>
-                                                        <th className="text-left p-4 font-semibold text-sm">CIF</th>
-                                                        <th className="text-left p-4 font-semibold text-sm">Tip document</th>
-                                                        <th className="text-left p-4 font-semibold text-sm">Data afișare</th>
-                                                        <th className="text-left p-4 font-semibold text-sm">Detalii</th>
-                                                        <th className="text-left p-4 font-semibold text-sm">Descarcă document</th>
+                                                        <th className="text-left p-4 font-semibold text-sm w-[200px]">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="whitespace-nowrap">CIF</span>
+                                                                <Input
+                                                                    type="text"
+                                                                    placeholder="Caută CIF..."
+                                                                    value={tableFilter}
+                                                                    onChange={(e) => setTableFilter(e.target.value)}
+                                                                    className="flex-1 text-xs h-8 bg-background/50 border-muted-foreground/30 focus:border-primary focus:bg-background transition-colors"
+                                                                />
+                                                            </div>
+                                                        </th>
+                                                        <th className="text-left p-4 font-semibold text-sm w-[180px]">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="whitespace-nowrap">Tip document</span>
+                                                                <Select value={documentTypeFilter} onValueChange={setDocumentTypeFilter}>
+                                                                    <SelectTrigger className="h-8 text-xs bg-background/50 border-muted-foreground/30 focus:border-primary transition-colors">
+                                                                        <SelectValue placeholder="Toate" />
+                                                                    </SelectTrigger>
+                                                                    <SelectContent>
+                                                                        <SelectItem value="all">Toate tipurile</SelectItem>
+                                                                        {uniqueDocumentTypes.map((type) => (
+                                                                            <SelectItem key={type.value} value={type.value}>
+                                                                                {type.label}
+                                                                            </SelectItem>
+                                                                        ))}
+                                                                    </SelectContent>
+                                                                </Select>
+                                                            </div>
+                                                        </th>
+                                                        <th className="text-left p-4 font-semibold text-sm w-[140px]">Data afișare</th>
+                                                        <th className="text-left p-4 font-semibold text-sm w-[300px]">Detalii</th>
+                                                        <th className="text-left p-4 font-semibold text-sm w-[150px]">Descarcă document</th>
                                                     </tr>
                                                 </thead>
-                                                <tbody>
-                                                    {messages.map((message, index) => (
-                                                        <tr key={message.id} className={`border-b hover:bg-muted/30 ${index % 2 === 0 ? 'bg-background' : 'bg-muted/10'}`}>
-                                                            <td className="p-4 align-top">
+                                                <tbody className={`transition-opacity duration-200 ease-in-out ${isTableUpdating ? 'opacity-50' : 'opacity-100'}`}>
+                                                    {paginatedMessages.length === 0 ? (
+                                                        <tr className="border-b bg-muted/5">
+                                                            <td colSpan={5} className="p-8 text-center">
+                                                                <div className="flex flex-col items-center gap-3">
+                                                                    <Icon iconNode={Mail} className="h-8 w-8 text-muted-foreground" />
+                                                                    <div>
+                                                                        <p className="text-muted-foreground font-medium">
+                                                                            Nu au fost găsite mesaje pentru criteriile selectate
+                                                                        </p>
+                                                                        <p className="text-sm text-muted-foreground mt-1">
+                                                                            {tableFilter && documentTypeFilter !== 'all' 
+                                                                                ? `Filtru CIF: "${tableFilter}" și Tip: "${getDocumentTypeDisplay(documentTypeFilter)}"` 
+                                                                                : tableFilter 
+                                                                                ? `Filtru CIF: "${tableFilter}"` 
+                                                                                : `Tip document: "${getDocumentTypeDisplay(documentTypeFilter)}"`
+                                                                            }
+                                                                        </p>
+                                                                        <p className="text-xs text-muted-foreground mt-2">
+                                                                            Modificați filtrele pentru a vedea alte mesaje
+                                                                        </p>
+                                                                    </div>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    ) : (
+                                                        paginatedMessages.map((message, index) => (
+                                                            <tr 
+                                                                key={message.id} 
+                                                                className={`border-b hover:bg-muted/30 transition-colors duration-200 ease-in-out ${index % 2 === 0 ? 'bg-background' : 'bg-muted/10'}`}
+                                                            >
+                                                            <td className="p-4 align-top w-[200px]">
                                                                 <div className="space-y-1">
-                                                                    <div className="font-semibold text-sm">{message.cif}</div>
-                                                                    <div className="text-xs text-muted-foreground">
+                                                                    <div className="font-semibold text-sm truncate">{message.cif}</div>
+                                                                    <div className="text-xs text-muted-foreground truncate">
                                                                         {getCompanyName(message.cif)}
                                                                     </div>
                                                                 </div>
                                                             </td>
-                                                            <td className="p-4 align-top">
+                                                            <td className="p-4 align-top w-[180px]">
                                                                 <Badge variant={getMessageTypeBadge(message.tip)} className="whitespace-nowrap">
                                                                     {getDocumentTypeDisplay(message.tip)}
                                                                 </Badge>
                                                             </td>
-                                                            <td className="p-4 align-top min-w-[140px]">
+                                                            <td className="p-4 align-top w-[140px]">
                                                                 <div className="text-sm font-medium">
                                                                     {formatRomanianDate(message.data_creare || message.formatted_date_creare || '')}
                                                                 </div>
                                                             </td>
-                                                            <td className="p-4 align-top max-w-xs">
+                                                            <td className="p-4 align-top w-[300px]">
                                                                 <div className="text-sm leading-relaxed">
-                                                                    {message.detalii}
+                                                                    <div className="line-clamp-3">{message.detalii}</div>
                                                                 </div>
                                                                 {message.downloaded_at && (
                                                                     <Badge variant="outline" className="text-green-600 mt-2">
@@ -757,7 +843,7 @@ După autentificare, apăsați din nou "Sincronizare mesaje ANAF".`)
                                                                     </Badge>
                                                                 )}
                                                             </td>
-                                                            <td className="p-4 align-top">
+                                                            <td className="p-4 align-top w-[150px]">
                                                                 <Button
                                                                     onClick={() => handleDownload(message.anaf_id)}
                                                                     size="sm"
@@ -769,16 +855,80 @@ După autentificare, apăsați din nou "Sincronizare mesaje ANAF".`)
                                                                 </Button>
                                                             </td>
                                                         </tr>
-                                                    ))}
+                                                    ))
+                                                    )}
                                                 </tbody>
                                             </table>
+                            </div>
+                            
+                            {/* Pagination Controls */}
+                            {totalPages > 1 && (
+                                <div className="flex items-center justify-between border-t bg-muted/20 px-4 py-3 rounded-b-lg">
+                                    <div className="flex items-center text-sm text-muted-foreground">
+                                        <span>
+                                            Afișate {startIndex + 1}-{Math.min(endIndex, filteredMessages.length)} din {filteredMessages.length} mesaje
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => setCurrentPage(currentPage - 1)}
+                                            disabled={currentPage === 1}
+                                            className="h-8 w-8 p-0"
+                                        >
+                                            <Icon iconNode={RotateCcw} className="h-4 w-4 rotate-90" />
+                                        </Button>
+                                        
+                                        <div className="flex items-center gap-1">
+                                            {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
+                                                if (
+                                                    page === 1 ||
+                                                    page === totalPages ||
+                                                    (page >= currentPage - 1 && page <= currentPage + 1)
+                                                ) {
+                                                    return (
+                                                        <Button
+                                                            key={page}
+                                                            variant={page === currentPage ? "default" : "outline"}
+                                                            size="sm"
+                                                            onClick={() => setCurrentPage(page)}
+                                                            className="h-8 w-8 p-0 text-xs"
+                                                        >
+                                                            {page}
+                                                        </Button>
+                                                    )
+                                                } else if (
+                                                    page === currentPage - 2 ||
+                                                    page === currentPage + 2
+                                                ) {
+                                                    return (
+                                                        <span key={page} className="text-muted-foreground px-1">
+                                                            ...
+                                                        </span>
+                                                    )
+                                                }
+                                                return null
+                                            })}
                                         </div>
-                                    )}
-                                </CardContent>
-                            </Card>
+                                        
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => setCurrentPage(currentPage + 1)}
+                                            disabled={currentPage === totalPages}
+                                            className="h-8 w-8 p-0"
+                                        >
+                                            <Icon iconNode={RotateCcw} className="h-4 w-4 -rotate-90" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
-                    </div>
-                    <PlaceholderPattern className="absolute inset-0 size-full stroke-neutral-900/20 dark:stroke-neutral-100/20 opacity-30 pointer-events-none" />
+                        )}
+                        
+                        <PlaceholderPattern className="absolute inset-0 size-full stroke-neutral-900/20 dark:stroke-neutral-100/20 opacity-30 pointer-events-none" />
+                    </>
                 </div>
             </div>
         </AppLayout>

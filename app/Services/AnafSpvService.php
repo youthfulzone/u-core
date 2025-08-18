@@ -584,27 +584,16 @@ class AnafSpvService
 
     public function testSessionWithImportedCookies(): bool
     {
-        try {
-            // Make a simple test call to verify session works
-            $response = $this->getMessagesList(60);
-
-            // Session is valid if we get a proper response structure
-            // Even if there are no messages, ANAF should return a valid array
-            return is_array($response) && (
-                isset($response['mesaje']) || // Normal response with messages array
-                isset($response['cnp']) ||    // Response with CNP (valid auth)
-                isset($response['cui'])       // Response with CUI (valid auth)
-            );
-        } catch (\Exception $e) {
-            // If the exception contains "Nu exista mesaje" it means auth worked but no messages
-            if (str_contains($e->getMessage(), 'Nu exista mesaje')) {
-                return true;
-            }
-
-            Log::debug('Session test failed', ['error' => $e->getMessage()]);
-
-            return false;
-        }
+        // Simply check if session is active in cache - no API calls
+        // Session validity will be verified when actually needed (during sync)
+        $isActive = $this->isSessionActive();
+        
+        Log::info('Session test completed without API call', [
+            'session_active' => $isActive,
+            'method' => 'cache_check_only'
+        ]);
+        
+        return $isActive;
     }
 
     public function isSessionActive(): bool

@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Test Clear Cookies Functionality</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .test-section {
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+        }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .info { background-color: #d1ecf1; border-color: #bee5eb; }
+        .warning { background-color: #fff3cd; border-color: #ffeaa7; }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background-color: #0056b3; }
+        button.danger { background-color: #dc3545; }
+        button.danger:hover { background-color: #c82333; }
+        #results { 
+            background-color: #f8f9fa; 
+            padding: 10px; 
+            border-radius: 3px; 
+            margin: 10px 0;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 ANAF Cookie Extension - Clear Cookies Test</h1>
+    
+    <div class="test-section info">
+        <h3>📋 Test Instructions</h3>
+        <p>This page helps you test the clear cookies functionality of the ANAF Cookie Helper extension.</p>
+        <ol>
+            <li>Load the extension in Chrome (chrome://extensions/ → Load unpacked)</li>
+            <li>Visit <a href="https://webserviced.anaf.ro" target="_blank">webserviced.anaf.ro</a> and authenticate</li>
+            <li>Check if cookies exist using the button below</li>
+            <li>Open the extension popup and click "Clear ANAF Cookies"</li>
+            <li>Verify cookies were cleared using the button below</li>
+        </ol>
+    </div>
+    
+    <div class="test-section">
+        <h3>🔍 Cookie Inspection</h3>
+        <button onclick="checkANAFCookies()">Check ANAF Cookies</button>
+        <button onclick="checkAllCookies()">Check All Cookies</button>
+        <button class="danger" onclick="clearResults()">Clear Results</button>
+        
+        <div id="results">Click a button above to see results...</div>
+    </div>
+    
+    <div class="test-section warning">
+        <h3>⚠️ Important Notes</h3>
+        <ul>
+            <li><strong>Cross-Origin Limitation:</strong> This test page cannot directly access webserviced.anaf.ro cookies due to browser security</li>
+            <li><strong>Extension Testing:</strong> Use the extension popup to test the clear functionality</li>
+            <li><strong>Manual Verification:</strong> After clearing, visit webserviced.anaf.ro to confirm you need to re-authenticate</li>
+            <li><strong>Browser DevTools:</strong> Use F12 → Application → Cookies → webserviced.anaf.ro for direct inspection</li>
+        </ul>
+    </div>
+    
+    <div class="test-section success">
+        <h3>✅ Expected Behavior</h3>
+        <p><strong>Before Clear:</strong></p>
+        <ul>
+            <li>Extension popup shows recent sync status</li>
+            <li>webserviced.anaf.ro has session cookies (MRHSession, F5_ST, etc.)</li>
+            <li>You can access ANAF services without re-authentication</li>
+        </ul>
+        
+        <p><strong>After Clear:</strong></p>
+        <ul>
+            <li>Extension popup shows "X cookies cleared" message</li>
+            <li>webserviced.anaf.ro cookies are removed from browser</li>
+            <li>Extension sync history is reset</li>
+            <li>You must re-authenticate at webserviced.anaf.ro</li>
+        </ul>
+    </div>
+
+    <script>
+        function checkANAFCookies() {
+            const results = document.getElementById('results');
+            results.textContent = 'Checking ANAF cookies...\n\n';
+            
+            // Note: This won't work for webserviced.anaf.ro cookies due to same-origin policy
+            // But we can show what cookies we can access from this domain
+            const allCookies = document.cookie;
+            
+            results.textContent += 'Cookies accessible from this page:\n';
+            results.textContent += '(Note: Cannot access webserviced.anaf.ro cookies due to security)\n\n';
+            
+            if (allCookies) {
+                const cookieArray = allCookies.split(';');
+                cookieArray.forEach(cookie => {
+                    results.textContent += `${cookie.trim()}\n`;
+                });
+            } else {
+                results.textContent += 'No cookies found for this domain.\n';
+            }
+            
+            results.textContent += '\n=================================\n';
+            results.textContent += 'To check ANAF cookies:\n';
+            results.textContent += '1. Press F12 to open DevTools\n';
+            results.textContent += '2. Go to Application tab\n';
+            results.textContent += '3. Click Cookies → webserviced.anaf.ro\n';
+            results.textContent += '4. Look for MRHSession, F5_ST, LastMRH_Session\n';
+            results.textContent += '\nOR use the extension popup "View Current Cookies" button';
+        }
+        
+        function checkAllCookies() {
+            const results = document.getElementById('results');
+            results.textContent = 'All cookies for this domain:\n\n';
+            
+            const allCookies = document.cookie;
+            if (allCookies) {
+                const cookieArray = allCookies.split(';');
+                results.textContent += `Found ${cookieArray.length} cookies:\n\n`;
+                cookieArray.forEach((cookie, index) => {
+                    results.textContent += `${index + 1}. ${cookie.trim()}\n`;
+                });
+            } else {
+                results.textContent += 'No cookies found for this domain.\n';
+            }
+            
+            results.textContent += '\n=================================\n';
+            results.textContent += 'Cookie security note:\n';
+            results.textContent += 'This page can only access cookies from its own domain.\n';
+            results.textContent += 'ANAF cookies are stored under webserviced.anaf.ro\n';
+            results.textContent += 'and cannot be accessed from this test page.\n';
+        }
+        
+        function clearResults() {
+            document.getElementById('results').textContent = 'Results cleared. Click a button above to see results...';
+        }
+        
+        // Display initial info
+        window.onload = function() {
+            const results = document.getElementById('results');
+            results.textContent = 'Ready to test! Click "Check ANAF Cookies" to start.\n\n';
+            results.textContent += 'Test Checklist:\n';
+            results.textContent += '☐ Extension loaded in Chrome\n';
+            results.textContent += '☐ Authenticated at webserviced.anaf.ro\n';
+            results.textContent += '☐ Cookies synced to extension\n';
+            results.textContent += '☐ Clear cookies button tested\n';
+            results.textContent += '☐ Re-authentication required after clear\n';
+        };
+    </script>
+</body>
+</html>

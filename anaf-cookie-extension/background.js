@@ -178,46 +178,141 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return true;
   }
+  
+  if (request.action === 'manualSync') {
+    syncCookiesToApp().then(() => {
+      sendResponse({success: true, message: 'Manual sync completed successfully'});
+    }).catch(error => {
+      sendResponse({success: false, error: error.message});
+    });
+    return true;
+  }
+  
+  if (request.action === 'clearCookies') {
+    clearANAFCookies().then((result) => {
+      sendResponse(result);
+    }).catch(error => {
+      sendResponse({success: false, error: error.message});
+    });
+    return true;
+  }
 });
 
 // Test connection to the Laravel app
 async function testConnection() {
   try {
     const result = await chrome.storage.sync.get(['appUrl']);
-    const appUrl = result.appUrl || 'https://u-core.test';
+    let appUrl = result.appUrl || 'https://u-core.test';
     
     console.log('Testing connection to:', `${appUrl}/api/anaf/session/status`);
     
-    const response = await fetch(`${appUrl}/api/anaf/session/status`);
+    // Try HTTPS first with proper timeout and error handling
+    let response;
+    let method = 'HTTPS';
+    
+    try {
+      // Set a reasonable timeout for the HTTPS request
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
+      response = await fetch(`${appUrl}/api/anaf/session/status`, {
+        signal: controller.signal,
+        method: 'GET'
+      });
+      
+      clearTimeout(timeoutId);
+      
+      // If we get here, HTTPS worked
+      method = 'HTTPS';
+      
+    } catch (httpsError) {
+      console.log('HTTPS failed:', httpsError.message);
+      console.log('Trying HTTP fallback...');
+      
+      // If HTTPS fails, try HTTP as fallback
+      const httpUrl = appUrl.replace('https://', 'http://');
+      console.log('Trying HTTP fallback:', `${httpUrl}/api/anaf/session/status`);
+      
+      try {
+        const httpController = new AbortController();
+        const httpTimeoutId = setTimeout(() => httpController.abort(), 5000);
+        
+        response = await fetch(`${httpUrl}/api/anaf/session/status`, {
+          signal: httpController.signal,
+          method: 'GET',
+          redirect: 'follow' // Follow redirects automatically
+        });
+        
+        clearTimeout(httpTimeoutId);
+        appUrl = httpUrl; // Update appUrl for success message
+        method = 'HTTP (fallback)';
+        
+      } catch (httpError) {
+        console.log('Both HTTPS and HTTP failed');
+        
+        // If both fail, show a helpful message about SSL certificate acceptance
+        return {
+          success: false,
+          message: 'Connection failed: SSL certificate needs acceptance. Please visit https://u-core.test in your browser and accept the certificate warning. The extension auto-sync functionality works independently of this popup test.',
+          errorType: 'SSL_CERTIFICATE_REQUIRED',
+          troubleshooting: [
+            'Visit https://u-core.test in your browser',
+            'Accept the SSL certificate warning when prompted',
+            'Return to this popup and test connection again',
+            'Note: Extension auto-sync works on the SPV page regardless of this popup test result'
+          ]
+        };
+      }
+    }
     
     if (response.ok) {
       const data = await response.json();
-      console.log('Connection test successful:', data);
+      console.log('Connection test successful via', method, ':', data);
+      
       return {
         success: true, 
-        message: `Connection successful! Session active: ${data.session?.active ? 'Yes' : 'No'}`,
+        message: `✅ Connection successful via ${method}! Session active: ${data.session?.active ? 'Yes' : 'No'}`,
+        method: method,
         data: data
       };
     } else {
       console.error('Connection test failed:', response.status, response.statusText);
       return {
         success: false, 
-        message: `HTTP ${response.status} - ${response.statusText}`
+        message: `Connection failed: HTTP ${response.status} - ${response.statusText}`,
+        method: method
       };
     }
   } catch (error) {
     console.error('Connection test error:', error);
     
     let errorMessage = error.message;
-    if (error.message.includes('net::ERR_CERT_AUTHORITY_INVALID')) {
-      errorMessage = 'SSL Certificate not accepted. Please visit the app URL first and accept the certificate.';
-    } else if (error.message.includes('Failed to fetch')) {
-      errorMessage = 'Cannot connect to app. Check if the Laravel app is running and the URL is correct.';
+    let troubleshooting = '';
+    
+    if (error.name === 'AbortError') {
+      errorMessage = 'Connection Timeout';
+      troubleshooting = 'The connection attempt timed out. Check if the Laravel app is running and accessible.';
+    } else if (error.message.includes('net::ERR_CERT_AUTHORITY_INVALID')) {
+      errorMessage = 'SSL Certificate Error';
+      troubleshooting = 'Please visit https://u-core.test in your browser and accept the SSL certificate warning first.';
+    } else if (error.message.includes('net::ERR_CERT_COMMON_NAME_INVALID')) {
+      errorMessage = 'SSL Certificate Name Mismatch';
+      troubleshooting = 'The SSL certificate does not match the domain. Try using localhost or 127.0.0.1 instead.';
+    } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+      errorMessage = 'Network Connection Failed';
+      troubleshooting = 'Check if the Laravel app is running and accessible. Try visiting the app URL directly first.';
+    } else if (error.message.includes('ERR_CONNECTION_REFUSED')) {
+      errorMessage = 'Connection Refused';
+      troubleshooting = 'The Laravel app appears to be offline. Check if it\'s running on the correct port.';
     }
+    
+    const fullMessage = troubleshooting ? `${errorMessage}: ${troubleshooting}` : errorMessage;
     
     return {
       success: false, 
-      message: errorMessage
+      message: fullMessage,
+      errorType: error.name,
+      errorCode: error.code || 'unknown'
     };
   }
 }
@@ -248,5 +343,111 @@ async function getAllANAFCookies() {
   } catch (error) {
     console.error('Error getting cookies:', error);
     return [];
+  }
+}
+
+// Function to clear ANAF cookies
+async function clearANAFCookies() {
+  try {
+    console.log('Starting to clear ANAF cookies...');
+    
+    // Get all cookies for webserviced.anaf.ro domain
+    const webservicedCookies = await chrome.cookies.getAll({domain: "webserviced.anaf.ro"});
+    const dotWebservicedCookies = await chrome.cookies.getAll({domain: ".webserviced.anaf.ro"});
+    
+    // Combine both domain variations
+    const allCookies = [...webservicedCookies, ...dotWebservicedCookies];
+    
+    if (allCookies.length === 0) {
+      console.log('No ANAF cookies found to clear');
+      return {
+        success: true,
+        message: 'No ANAF cookies found to clear',
+        clearedCount: 0
+      };
+    }
+    
+    console.log(`Found ${allCookies.length} ANAF cookies to clear`);
+    
+    // Clear each cookie
+    let clearedCount = 0;
+    let errorCount = 0;
+    const errors = [];
+    
+    for (const cookie of allCookies) {
+      try {
+        // Construct the URL for cookie removal
+        const protocol = cookie.secure ? 'https:' : 'http:';
+        const url = `${protocol}//${cookie.domain}${cookie.path}`;
+        
+        console.log(`Clearing cookie: ${cookie.name} from ${url}`);
+        
+        await chrome.cookies.remove({
+          url: url,
+          name: cookie.name
+        });
+        
+        clearedCount++;
+        console.log(`✅ Cleared cookie: ${cookie.name}`);
+        
+      } catch (error) {
+        errorCount++;
+        const errorMsg = `Failed to clear cookie ${cookie.name}: ${error.message}`;
+        console.error(errorMsg);
+        errors.push(errorMsg);
+      }
+    }
+    
+    // Clear stored sync status to reset the extension state
+    await chrome.storage.local.clear();
+    console.log('Cleared extension storage');
+    
+    // Prepare result message
+    let message = `Cleared ${clearedCount} ANAF cookies`;
+    if (errorCount > 0) {
+      message += ` (${errorCount} errors)`;
+    }
+    
+    const result = {
+      success: true,
+      message: message,
+      clearedCount: clearedCount,
+      errorCount: errorCount,
+      totalFound: allCookies.length
+    };
+    
+    if (errors.length > 0) {
+      result.errors = errors;
+    }
+    
+    console.log('Cookie clearing completed:', result);
+    
+    // Store the clear operation details
+    await chrome.storage.local.set({
+      lastClear: Date.now(),
+      lastClearStatus: 'success',
+      lastClearMessage: message,
+      clearedCookieCount: clearedCount
+    });
+    
+    return result;
+    
+  } catch (error) {
+    console.error('Error clearing ANAF cookies:', error);
+    
+    const errorMessage = `Failed to clear cookies: ${error.message}`;
+    
+    // Store the error details
+    await chrome.storage.local.set({
+      lastClear: Date.now(),
+      lastClearStatus: 'error',
+      lastClearError: errorMessage
+    });
+    
+    return {
+      success: false,
+      message: errorMessage,
+      error: error.message
+    };
   }
 }

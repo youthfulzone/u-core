@@ -72,6 +72,14 @@
             background-color: #545b62;
         }
         
+        .button.danger {
+            background-color: #dc3545;
+        }
+        
+        .button.danger:hover {
+            background-color: #c82333;
+        }
+        
         .cookie-list {
             max-height: 150px;
             overflow-y: auto;
@@ -117,6 +125,9 @@
 <body>
     <div class="header">
         <h1>🏛️ ANAF Cookie Helper</h1>
+        <div id="versionInfo" style="font-size: 11px; color: #666; margin-top: 5px;">
+            Version 1.0.4 • <span id="connectionHealth">Connection: checking...</span>
+        </div>
     </div>
     
     <div id="status" class="status"></div>
@@ -128,6 +139,7 @@
     <button id="syncBtn" class="button">🔄 Sync Cookies to App</button>
     <button id="testBtn" class="button secondary">🧪 Test Connection</button>
     <button id="viewBtn" class="button secondary">👁️ View Current Cookies</button>
+    <button id="clearBtn" class="button danger">🗑️ Clear ANAF Cookies</button>
     <button id="errorBtn" class="button secondary" style="display: none;">🔍 Show Error Details</button>
     
     <div id="cookieDisplay" class="cookie-list" style="display: none;">
@@ -142,13 +154,15 @@
     
     <div class="help">
         <strong>Setup Instructions:</strong><br>
-        1. <strong>First visit:</strong> <a href="https://u-core.test" target="_blank">https://u-core.test</a> and accept the SSL certificate<br>
+        1. <strong>Accept SSL Certificate:</strong> <a href="https://u-core.test" target="_blank">Visit u-core.test</a> and accept the SSL warning<br>
         2. Visit <strong>https://webserviced.anaf.ro</strong> and authenticate with your token<br>
         3. Extension automatically syncs session cookies to your app<br>
         4. Check <a href="https://u-core.test/spv" target="_blank">SPV page</a> for synced messages<br>
         <br>
-        <strong>Note:</strong> Only syncs cookies from webserviced.anaf.ro (not other ANAF subdomains)<br>
-        <strong>SSL:</strong> You must accept the self-signed certificate for u-core.test first
+        <strong>✅ Auto-Sync:</strong> Extension works automatically on the SPV page<br>
+        <strong>🗑️ Clear Cookies:</strong> Remove all ANAF cookies to reset authentication<br>
+        <strong>⚠️ Connection Test:</strong> Popup connection test requires SSL certificate acceptance<br>
+        <strong>🔧 Troubleshooting:</strong> If sync fails, check browser console for errors
     </div>
 
     <script src="popup.js"></script>
