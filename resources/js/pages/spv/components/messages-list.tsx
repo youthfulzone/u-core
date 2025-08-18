@@ -127,7 +127,7 @@ export default function MessagesList({ messages, onSyncMessages, loading }: Mess
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                         <div>
                             <Button 
-                                onClick={() => window.open('https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile=50', '_blank')}
+                                onClick={() => window.open('https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile=60', '_blank')}
                                 variant="outline"
                                 className="w-full"
                             >

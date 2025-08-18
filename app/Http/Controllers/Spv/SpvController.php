@@ -8,28 +8,25 @@ use App\Http\Requests\Spv\MessagesListRequest;
 use App\Models\Spv\SpvMessage;
 use App\Models\Spv\SpvRequest;
 use App\Services\AnafSpvService;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
-use Inertia\Response as InertiaResponse;
-use Carbon\Carbon;
 
 class SpvController extends Controller
 {
     public function __construct(
         private AnafSpvService $spvService
-    ) {
-    }
+    ) {}
 
     public function index()
     {
         $user = Auth::user();
-        
+
         $messages = SpvMessage::forUser((string) $user->id)
             ->recent(60)
             ->orderBy('data_creare', 'desc')
@@ -45,7 +42,9 @@ class SpvController extends Controller
 
         // Get comprehensive authentication status
         $authStatus = $this->spvService->getAuthenticationStatus();
-        
+
+        // Get API call status
+        $apiCallStatus = $this->spvService->getApiCallStatus();
 
         return Inertia::render('spv/Index', [
             'messages' => $messages,
@@ -56,6 +55,7 @@ class SpvController extends Controller
             'authenticationStatus' => $authStatus,
             'documentTypes' => $this->spvService->getAvailableDocumentTypes(),
             'incomeReasons' => $this->spvService->getIncomeStatementReasons(),
+            'apiCallStatus' => $apiCallStatus,
         ]);
     }
 
@@ -74,11 +74,11 @@ class SpvController extends Controller
 
             // Use session-based authentication only
             $response = $this->spvService->getMessagesList($days, $cif);
-            
+
             // Handle empty response or no messages
-            if (empty($response) || !isset($response['mesaje']) || !is_array($response['mesaje'])) {
+            if (empty($response) || ! isset($response['mesaje']) || ! is_array($response['mesaje'])) {
                 $message = 'No messages found. This may be due to an inactive ANAF session or no messages available for the specified period.';
-                
+
                 if ($request->wantsJson()) {
                     return response()->json([
                         'success' => true,
@@ -88,18 +88,18 @@ class SpvController extends Controller
                         'session_required' => true,
                     ]);
                 }
-                
+
                 return back()->with('info', $message);
             }
 
             $syncedCount = 0;
-            
+
             foreach ($response['mesaje'] as $messageData) {
                 $existingMessage = SpvMessage::where('anaf_id', $messageData['id'])
                     ->where('user_id', (string) $user->id)
                     ->first();
 
-                if (!$existingMessage) {
+                if (! $existingMessage) {
                     SpvMessage::create([
                         'user_id' => (string) $user->id,
                         'anaf_id' => $messageData['id'],
@@ -118,7 +118,7 @@ class SpvController extends Controller
             }
 
             $message = "Synchronized {$syncedCount} new messages.";
-            
+
             if ($request->wantsJson()) {
                 return response()->json([
                     'success' => true,
@@ -127,7 +127,7 @@ class SpvController extends Controller
                     'total_messages' => count($response['mesaje']),
                 ]);
             }
-            
+
             return back()->with('success', $message);
 
         } catch (\Exception $e) {
@@ -136,14 +136,14 @@ class SpvController extends Controller
                 'days' => $days,
                 'error' => $e->getMessage(),
             ]);
-            
+
             if ($request->wantsJson()) {
                 return response()->json([
                     'success' => false,
                     'message' => $e->getMessage(),
                 ], 400);
             }
-            
+
             return back()->withErrors(['message' => $e->getMessage()]);
         }
     }
@@ -152,13 +152,13 @@ class SpvController extends Controller
     {
         try {
             $user = Auth::user();
-            
+
             Log::info('Download request initiated', [
                 'user_id' => $user->id,
                 'message_id' => $messageId,
-                'user_agent' => $request->userAgent()
+                'user_agent' => $request->userAgent(),
             ]);
-            
+
             $message = SpvMessage::where('anaf_id', $messageId)
                 ->where('user_id', (string) $user->id)
                 ->firstOrFail();
@@ -168,13 +168,13 @@ class SpvController extends Controller
                 Log::info('Serving cached file', [
                     'message_id' => $messageId,
                     'file_path' => $message->file_path,
-                    'file_size' => $message->file_size
+                    'file_size' => $message->file_size,
                 ]);
-                
+
                 $cachedContent = Storage::disk('local')->get($message->file_path);
                 $cachedFilename = basename($message->file_path);
                 $contentType = str_ends_with($cachedFilename, '.pdf') ? 'application/pdf' : 'application/octet-stream';
-                
+
                 return response($cachedContent)
                     ->header('Content-Type', $contentType)
                     ->header('Content-Disposition', "attachment; filename=\"{$cachedFilename}\"")
@@ -184,14 +184,14 @@ class SpvController extends Controller
             // Download fresh from ANAF
             Log::info('Downloading fresh from ANAF', ['message_id' => $messageId]);
             $response = $this->spvService->downloadMessage($messageId);
-            
+
             $contentType = $response->header('Content-Type', 'application/octet-stream');
             $contentLength = strlen($response->body());
-            
+
             // Determine file extension based on content type and content
             $extension = '.bin'; // default
-            $filename = "message_{$messageId}_" . now()->format('Y-m-d_H-i-s');
-            
+            $filename = "message_{$messageId}_".now()->format('Y-m-d_H-i-s');
+
             if (str_contains($contentType, 'application/pdf')) {
                 $extension = '.pdf';
             } elseif (str_starts_with($response->body(), '%PDF')) {
@@ -203,19 +203,19 @@ class SpvController extends Controller
             } elseif (str_contains($contentType, 'text/html')) {
                 $extension = '.html';
             }
-            
+
             $filename .= $extension;
             $filePath = "spv/downloads/{$user->id}/{$filename}";
-            
+
             // Ensure directory exists
             $directory = dirname($filePath);
-            if (!Storage::disk('local')->exists($directory)) {
+            if (! Storage::disk('local')->exists($directory)) {
                 Storage::disk('local')->makeDirectory($directory);
             }
-            
+
             // Store file
             Storage::disk('local')->put($filePath, $response->body());
-            
+
             // Mark message as downloaded
             $message->markAsDownloaded($user->id, $filePath, $contentLength);
 
@@ -223,7 +223,7 @@ class SpvController extends Controller
                 'message_id' => $messageId,
                 'filename' => $filename,
                 'file_size' => $contentLength,
-                'content_type' => $contentType
+                'content_type' => $contentType,
             ]);
 
             return response($response->body())
@@ -236,20 +236,20 @@ class SpvController extends Controller
             Log::error('Download failed', [
                 'message_id' => $messageId,
                 'user_id' => $user->id ?? null,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ]);
-            
+
             if ($request->wantsJson()) {
                 return response()->json([
                     'success' => false,
                     'message' => $e->getMessage(),
                 ], 400);
             }
-            
+
             // For browser requests, return an error page or redirect
             return response()->view('errors.download', [
                 'message' => $e->getMessage(),
-                'messageId' => $messageId
+                'messageId' => $messageId,
             ], 400);
         }
     }
@@ -259,7 +259,7 @@ class SpvController extends Controller
         try {
             $user = Auth::user();
             $validated = $request->validated();
-            
+
             $spvRequest = SpvRequest::create([
                 'user_id' => (string) $user->id,
                 'tip' => $validated['tip'],
@@ -275,7 +275,7 @@ class SpvController extends Controller
 
             $response = $this->spvService->makeDocumentRequest(
                 $validated['tip'],
-                array_filter($validated, fn($value) => !is_null($value))
+                array_filter($validated, fn ($value) => ! is_null($value))
             );
 
             $spvRequest->markAsProcessed($response);
@@ -291,22 +291,13 @@ class SpvController extends Controller
             if (isset($spvRequest)) {
                 $spvRequest->markAsError($e->getMessage());
             }
-            
+
             return response()->json([
                 'success' => false,
                 'message' => $e->getMessage(),
             ], 400);
         }
     }
-
-
-
-
-
-
-
-
-
 
     private function parseAnafDate(string $dateString): ?Carbon
     {
@@ -330,30 +321,30 @@ class SpvController extends Controller
         try {
             $user = Auth::user();
             $anafData = $request->input('anafData');
-            
+
             Log::info('Processing direct ANAF data from frontend', [
                 'user_id' => $user->id,
                 'data_keys' => array_keys($anafData ?? []),
                 'has_mesaje' => isset($anafData['mesaje']),
                 'mesaje_count' => isset($anafData['mesaje']) ? count($anafData['mesaje']) : 0,
             ]);
-            
-            if (!isset($anafData['mesaje']) || !is_array($anafData['mesaje'])) {
+
+            if (! isset($anafData['mesaje']) || ! is_array($anafData['mesaje'])) {
                 throw new \Exception('Invalid ANAF data structure. Expected "mesaje" array.');
             }
-            
+
             $syncedCount = 0;
-            
+
             foreach ($anafData['mesaje'] as $messageData) {
-                if (!isset($messageData['id'])) {
+                if (! isset($messageData['id'])) {
                     continue;
                 }
-                
+
                 $existingMessage = SpvMessage::where('anaf_id', $messageData['id'])
                     ->where('user_id', (string) $user->id)
                     ->first();
 
-                if (!$existingMessage) {
+                if (! $existingMessage) {
                     SpvMessage::create([
                         'user_id' => (string) $user->id,
                         'anaf_id' => $messageData['id'],
@@ -370,23 +361,23 @@ class SpvController extends Controller
                     $syncedCount++;
                 }
             }
-            
+
             return response()->json([
                 'success' => true,
                 'message' => "Successfully processed {$syncedCount} new messages from direct ANAF call.",
                 'synced_count' => $syncedCount,
                 'total_messages' => count($anafData['mesaje']),
             ]);
-            
+
         } catch (\Exception $e) {
             Log::error('Direct ANAF Data Processing Failed', [
                 'error' => $e->getMessage(),
                 'user_id' => $user->id ?? null,
             ]);
-            
+
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to process direct ANAF data: ' . $e->getMessage()
+                'message' => 'Failed to process direct ANAF data: '.$e->getMessage(),
             ], 400);
         }
     }
@@ -395,7 +386,7 @@ class SpvController extends Controller
     {
         try {
             $user = Auth::user();
-            
+
             // Debug: Show what cookies we have
             $browserCookies = $request->cookies->all();
             $anafCookies = [];
@@ -404,16 +395,16 @@ class SpvController extends Controller
                     $anafCookies[$name] = $value;
                 }
             }
-            
+
             Log::info('Browser cookies analysis', [
                 'total_cookies' => count($browserCookies),
                 'anaf_cookies' => $anafCookies,
                 'all_cookie_names' => array_keys($browserCookies),
             ]);
-            
+
             // Make a test call to see what ANAF returns
-            $response = $this->spvService->getMessagesList(1); // Just 1 day for testing
-            
+            $response = $this->spvService->getMessagesList(60); // Standard 60 days
+
             return response()->json([
                 'success' => true,
                 'message' => 'ANAF test call successful',
@@ -421,9 +412,9 @@ class SpvController extends Controller
                 'debug' => [
                     'browser_cookies' => count($browserCookies),
                     'anaf_cookies' => $anafCookies,
-                ]
+                ],
             ]);
-            
+
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -432,7 +423,7 @@ class SpvController extends Controller
                 'debug' => [
                     'browser_cookies' => $request->cookies->count(),
                     'cookie_names' => array_keys($request->cookies->all()),
-                ]
+                ],
             ], 400);
         }
     }
@@ -452,29 +443,31 @@ class SpvController extends Controller
             $user = Auth::user();
             $days = $request->input('days', 60);
             $cif = $request->input('cif');
-            
+
             // This endpoint will automatically try multiple approaches
             Log::info('Auto connect attempt', [
                 'user_id' => $user->id,
                 'days' => $days,
                 'cif' => $cif,
             ]);
-            
+
             // Use session-based authentication only
             try {
                 $response = $this->spvService->getMessagesList($days, $cif);
-                
+
                 if (isset($response['mesaje']) && is_array($response['mesaje'])) {
                     $syncedCount = 0;
-                    
+
                     foreach ($response['mesaje'] as $messageData) {
-                        if (!isset($messageData['id'])) continue;
-                        
+                        if (! isset($messageData['id'])) {
+                            continue;
+                        }
+
                         $existingMessage = SpvMessage::where('anaf_id', $messageData['id'])
                             ->where('user_id', (string) $user->id)
                             ->first();
 
-                        if (!$existingMessage) {
+                        if (! $existingMessage) {
                             SpvMessage::create([
                                 'user_id' => (string) $user->id,
                                 'anaf_id' => $messageData['id'],
@@ -491,7 +484,7 @@ class SpvController extends Controller
                             $syncedCount++;
                         }
                     }
-                    
+
                     return response()->json([
                         'success' => true,
                         'message' => "Successfully synced {$syncedCount} new messages automatically!",
@@ -502,54 +495,146 @@ class SpvController extends Controller
             } catch (\Exception $e) {
                 Log::info('Direct ANAF approach failed', ['error' => $e->getMessage()]);
             }
-            
+
             // If we get here, authentication is required
             return response()->json([
                 'success' => false,
                 'message' => '🔐 ANAF authentication is required. The system will automatically retry after you authenticate.',
                 'requires_auth' => true,
-                'auth_url' => "https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile={$days}" . ($cif ? "&cif={$cif}" : ''),
+                'auth_url' => "https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile={$days}".($cif ? "&cif={$cif}" : ''),
             ], 401);
-            
+
         } catch (\Exception $e) {
             Log::error('Auto connect failed', [
                 'error' => $e->getMessage(),
                 'user_id' => $user->id ?? null,
             ]);
-            
+
             return response()->json([
                 'success' => false,
-                'message' => 'Auto connect failed: ' . $e->getMessage(),
+                'message' => 'Auto connect failed: '.$e->getMessage(),
             ], 500);
         }
     }
-
-
-
-
 
     public function getAuthenticationStatus(Request $request): JsonResponse
     {
         try {
             $authStatus = $this->spvService->getAuthenticationStatus();
-            
+
             return response()->json([
                 'success' => true,
-                'data' => $authStatus
+                'data' => $authStatus,
             ]);
-            
+
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to get authentication status: ' . $e->getMessage()
+                'message' => 'Failed to get authentication status: '.$e->getMessage(),
             ], 500);
         }
     }
 
+    public function clearData(Request $request): JsonResponse
+    {
+        try {
+            $user = Auth::user();
 
+            // Get current counts
+            $messageCount = SpvMessage::forUser((string) $user->id)->count();
+            $requestCount = SpvRequest::forUser((string) $user->id)->count();
 
+            Log::info('Clearing SPV data for user', [
+                'user_id' => $user->id,
+                'message_count' => $messageCount,
+                'request_count' => $requestCount,
+            ]);
 
+            if ($messageCount === 0 && $requestCount === 0) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'No SPV data to clear - database is already empty.',
+                    'cleared' => [
+                        'messages' => 0,
+                        'requests' => 0,
+                    ],
+                ]);
+            }
 
+            // Clear all SPV messages for this user
+            $deletedMessages = SpvMessage::forUser((string) $user->id)->delete();
 
+            // Clear all SPV requests for this user
+            $deletedRequests = SpvRequest::forUser((string) $user->id)->delete();
 
+            Log::info('SPV data cleared successfully', [
+                'user_id' => $user->id,
+                'deleted_messages' => $deletedMessages,
+                'deleted_requests' => $deletedRequests,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Successfully cleared {$deletedMessages} messages and {$deletedRequests} requests.",
+                'cleared' => [
+                    'messages' => $deletedMessages,
+                    'requests' => $deletedRequests,
+                ],
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to clear SPV data', [
+                'user_id' => Auth::id(),
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to clear SPV data: '.$e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function getApiCallStatus(): JsonResponse
+    {
+        try {
+            $apiCallStatus = $this->spvService->getApiCallStatus();
+
+            return response()->json([
+                'success' => true,
+                'data' => $apiCallStatus,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to get API call status', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to get API call status',
+            ], 500);
+        }
+    }
+
+    public function resetApiCounter(): JsonResponse
+    {
+        try {
+            $this->spvService->resetApiCallCounter();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'API call counter has been reset',
+                'data' => $this->spvService->getApiCallStatus(),
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to reset API counter', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to reset API counter',
+            ], 500);
+        }
+    }
 }

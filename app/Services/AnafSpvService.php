@@ -2,42 +2,44 @@
 
 namespace App\Services;
 
-use Illuminate\Http\Client\Response;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
+use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class AnafSpvService
 {
     private const BASE_URL = 'https://webserviced.anaf.ro/SPVWS2/rest';
+
     private const SESSION_CACHE_KEY = 'anaf_spv_session';
+
     private const SESSION_TIMEOUT = 3 * 60 * 60; // 3 hours
 
-    public function __construct()
-    {
-    }
+    private const API_TRACKER_CACHE_KEY = 'anaf_api_tracker';
+
+    public function __construct() {}
 
     public function getMessagesList(int $days = 60, ?string $cif = null, ?array $browserCookies = null): array
     {
         $params = ['zile' => $days];
-        
+
         if ($cif) {
             $params['cif'] = $cif;
         }
 
         // Use session cookies only - no certificate authentication
         $response = $this->makeRequest('listaMesaje', $params, $browserCookies);
-        
+
         Log::info('ANAF Response Details', [
             'status_code' => $response->status(),
             'headers' => $response->headers(),
             'body_preview' => substr($response->body(), 0, 500),
             'content_type' => $response->header('Content-Type'),
         ]);
-        
+
         if ($response->failed()) {
-            $errorMessage = 'ANAF API request failed - Status: ' . $response->status() . ', Body: ' . $response->body();
+            $errorMessage = 'ANAF API request failed - Status: '.$response->status().', Body: '.$response->body();
             Log::error($errorMessage);
             throw new \Exception($errorMessage);
         }
@@ -45,7 +47,7 @@ class AnafSpvService
         // Check response content and log for debugging
         $contentType = $response->header('Content-Type', '');
         $bodyContent = $response->body();
-        
+
         Log::info('ANAF Response Analysis', [
             'content_type' => $contentType,
             'status_code' => $response->status(),
@@ -55,22 +57,22 @@ class AnafSpvService
             'has_cert_error' => str_contains($bodyContent, 'Certificatul nu a fost prezentat'),
             'has_logout' => str_contains($bodyContent, 'logout'),
         ]);
-        
+
         // Check for specific ANAF logout page
         if (str_contains($bodyContent, 'Pagina logout') || str_contains($bodyContent, '<title>Pagina logout</title>')) {
             throw new \Exception('🔐 ANAF Session Expired: ANAF has logged you out. Please visit https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile=60 to authenticate with your physical token, then try sync again.');
         }
-        
+
         // Check for certificate authentication errors
         if (str_contains($bodyContent, 'Certificatul nu a fost prezentat')) {
             throw new \Exception('🔐 ANAF Authentication Required: Certificate not presented. Please visit https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile=60 to authenticate with your physical token, then try sync again.');
         }
-        
+
         // Check for other logout indicators
         if (str_contains($bodyContent, 'logout') && str_contains($contentType, 'text/html')) {
             throw new \Exception('🔐 ANAF Session Expired: Your authentication session has expired. Please visit https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile=60 to authenticate, then try sync again.');
         }
-        
+
         // Try to parse as JSON first, only throw error if it's clearly an auth error HTML page
         if (str_contains($contentType, 'text/html') || str_contains($bodyContent, '<html>')) {
             // Check if it's actually an authentication page
@@ -82,19 +84,19 @@ class AnafSpvService
         }
 
         $data = $response->json();
-        
+
         Log::info('ANAF JSON Response', [
             'data_type' => gettype($data),
             'data_preview' => is_array($data) ? array_keys($data) : $data,
         ]);
-        
+
         // Ensure we always return an array, even if response is null
-        if (!is_array($data)) {
-            throw new \Exception('ANAF returned invalid JSON data: ' . $response->body());
+        if (! is_array($data)) {
+            throw new \Exception('ANAF returned invalid JSON data: '.$response->body());
         }
-        
+
         if (isset($data['eroare'])) {
-            throw new \Exception('ANAF API Error: ' . $data['eroare']);
+            throw new \Exception('ANAF API Error: '.$data['eroare']);
         }
 
         return $data;
@@ -104,18 +106,18 @@ class AnafSpvService
     {
         Log::info('Starting message download', [
             'message_id' => $messageId,
-            'session_active' => $this->isSessionActive()
+            'session_active' => $this->isSessionActive(),
         ]);
-        
+
         $response = $this->makeRequest('descarcare', ['id' => $messageId]);
-        
+
         if ($response->failed()) {
             Log::error('Message download failed', [
                 'message_id' => $messageId,
                 'status' => $response->status(),
-                'body' => $response->body()
+                'body' => $response->body(),
             ]);
-            throw new \Exception('Failed to download message: ' . $response->body());
+            throw new \Exception('Failed to download message: '.$response->body());
         }
 
         // Check if response is JSON (error) or PDF (success)
@@ -123,7 +125,7 @@ class AnafSpvService
         $contentLength = $response->header('Content-Length', 0);
         $bodyContent = $response->body();
         $bodyPreview = substr($bodyContent, 0, 500);
-        
+
         Log::info('Message download response details', [
             'message_id' => $messageId,
             'content_type' => $contentType,
@@ -134,7 +136,7 @@ class AnafSpvService
             'is_pdf' => str_starts_with($bodyContent, '%PDF'),
             'looks_like_json' => str_starts_with(trim($bodyContent), '{'),
         ]);
-        
+
         // First check if it's a JSON error response
         if (str_contains($contentType, 'application/json') || str_starts_with(trim($bodyContent), '{')) {
             try {
@@ -143,9 +145,9 @@ class AnafSpvService
                     Log::error('ANAF returned JSON error for download', [
                         'message_id' => $messageId,
                         'error' => $data['eroare'],
-                        'full_response' => $data
+                        'full_response' => $data,
                     ]);
-                    throw new \Exception('ANAF Error: ' . $data['eroare']);
+                    throw new \Exception('ANAF Error: '.$data['eroare']);
                 }
             } catch (\Exception $e) {
                 if (str_contains($e->getMessage(), 'ANAF Error:')) {
@@ -154,49 +156,49 @@ class AnafSpvService
                 // If JSON parsing failed but looks like JSON, it might be malformed
                 Log::warning('Failed to parse JSON response', [
                     'message_id' => $messageId,
-                    'body_preview' => $bodyPreview
+                    'body_preview' => $bodyPreview,
                 ]);
             }
         }
-        
+
         // Check for authentication errors in HTML response
         if (str_contains($contentType, 'text/html') || str_contains($bodyContent, '<html>')) {
             Log::warning('Received HTML response instead of PDF', [
                 'message_id' => $messageId,
                 'content_type' => $contentType,
-                'body_preview' => $bodyPreview
+                'body_preview' => $bodyPreview,
             ]);
-            
-            if (str_contains($bodyContent, 'Certificatul nu a fost prezentat') || 
-                str_contains($bodyContent, 'logout') || 
+
+            if (str_contains($bodyContent, 'Certificatul nu a fost prezentat') ||
+                str_contains($bodyContent, 'logout') ||
                 str_contains($bodyContent, 'autentificare')) {
                 Log::warning('Authentication required for download', ['message_id' => $messageId]);
                 throw new \Exception('🔐 Authentication required. Please re-authenticate at ANAF and try again.');
             }
-            
+
             // Generic HTML error
             throw new \Exception('🔐 Received HTML response instead of PDF. Please check your ANAF authentication.');
         }
-        
+
         // Check if it's actually a PDF
-        if (!str_starts_with($bodyContent, '%PDF')) {
+        if (! str_starts_with($bodyContent, '%PDF')) {
             Log::warning('Downloaded content is not a PDF', [
                 'message_id' => $messageId,
                 'content_type' => $contentType,
                 'body_preview' => $bodyPreview,
-                'first_4_bytes' => bin2hex(substr($bodyContent, 0, 4))
+                'first_4_bytes' => bin2hex(substr($bodyContent, 0, 4)),
             ]);
-            
+
             // If it's small and might be an error message
             if (strlen($bodyContent) < 1000) {
-                throw new \Exception('Downloaded content is not a valid PDF. Response: ' . $bodyPreview);
+                throw new \Exception('Downloaded content is not a valid PDF. Response: '.$bodyPreview);
             }
         }
 
         Log::info('Message download successful', [
             'message_id' => $messageId,
             'file_size' => strlen($bodyContent),
-            'content_type' => $contentType
+            'content_type' => $contentType,
         ]);
 
         return $response;
@@ -205,15 +207,15 @@ class AnafSpvService
     public function makeDocumentRequest(string $type, array $parameters): array
     {
         $params = array_merge(['tip' => $type], $parameters);
-        
+
         $response = $this->makeRequest('cerere', $params);
-        
+
         if ($response->failed()) {
-            throw new \Exception('Failed to make document request: ' . $response->body());
+            throw new \Exception('Failed to make document request: '.$response->body());
         }
 
         $data = $response->json();
-        
+
         if (isset($data['eroare'])) {
             throw new \Exception($data['eroare']);
         }
@@ -300,15 +302,28 @@ class AnafSpvService
 
     private function makeRequest(string $endpoint, array $params = [], ?array $browserCookies = null): Response
     {
-        $url = self::BASE_URL . '/' . $endpoint;
-        
+        // Get or create API call tracker from cache
+        $tracker = $this->getApiTracker();
+
+        // Check if we've hit the limit
+        if ($tracker['calls_remaining'] <= 0) {
+            throw new \Exception('🚫 API call limit reached! You have used all 100 API calls. Reset at: '.Carbon::parse($tracker['reset_at'])->format('Y-m-d H:i:s'));
+        }
+
+        $url = self::BASE_URL.'/'.$endpoint;
+
         Log::info('ANAF SPV API Request', [
             'url' => $url,
             'params' => $params,
-            'has_browser_cookies' => !empty($browserCookies),
+            'has_browser_cookies' => ! empty($browserCookies),
             'browser_cookie_count' => $browserCookies ? count($browserCookies) : 0,
             'has_session' => $this->isSessionActive(),
+            'api_calls_made' => $tracker['calls_made'],
+            'api_calls_remaining' => $tracker['calls_remaining'],
         ]);
+
+        // Increment the counter before making the request
+        $this->incrementApiCalls();
 
         // Create an HTTP client that mimics a real browser session
         $client = Http::withOptions([
@@ -322,20 +337,20 @@ class AnafSpvService
                 'protocols' => ['https'],
             ],
         ])
-        ->withHeaders([
-            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept' => $endpoint === 'descarcare' ? 'application/pdf, application/json, text/html, */*' : 'application/json, text/html, */*',
-            'Accept-Language' => 'ro-RO,ro;q=0.9,en;q=0.8',
-            'Accept-Encoding' => 'gzip, deflate',
-            'Cache-Control' => 'no-cache',
-            'Pragma' => 'no-cache',
-            'Referer' => 'https://webserviced.anaf.ro/',
-        ]);
+            ->withHeaders([
+                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept' => $endpoint === 'descarcare' ? 'application/pdf, application/json, text/html, */*' : 'application/json, text/html, */*',
+                'Accept-Language' => 'ro-RO,ro;q=0.9,en;q=0.8',
+                'Accept-Encoding' => 'gzip, deflate',
+                'Cache-Control' => 'no-cache',
+                'Pragma' => 'no-cache',
+                'Referer' => 'https://webserviced.anaf.ro/',
+            ]);
 
         // Get session cookies if available (prioritize stored session over provided cookies)
         $sessionData = Cache::get(self::SESSION_CACHE_KEY, []);
         $sessionCookies = [];
-        
+
         if (is_array($sessionData)) {
             // Handle both old and new format
             $cookies = isset($sessionData['cookies']) ? $sessionData['cookies'] : $sessionData;
@@ -343,41 +358,41 @@ class AnafSpvService
                 $sessionCookies = $cookies;
             }
         }
-        
+
         // Fall back to provided browser cookies if no session
         if (empty($sessionCookies) && $browserCookies) {
             $sessionCookies = $browserCookies;
         }
-        
-        if (!empty($sessionCookies)) {
+
+        if (! empty($sessionCookies)) {
             $cookieStrings = [];
             foreach ($sessionCookies as $name => $value) {
                 // Only forward ANAF-related cookies
-                if (str_contains($name, 'JSESSION') || 
-                    str_contains($name, 'anaf') || 
-                    str_contains($name, 'MRH') || 
+                if (str_contains($name, 'JSESSION') ||
+                    str_contains($name, 'anaf') ||
+                    str_contains($name, 'MRH') ||
                     str_contains($name, 'F5_') ||
                     str_contains($name, 'session')) {
                     $cookieStrings[] = "{$name}={$value}";
                 }
             }
-            
-            if (!empty($cookieStrings)) {
+
+            if (! empty($cookieStrings)) {
                 $client = $client->withHeaders([
-                    'Cookie' => implode('; ', $cookieStrings)
+                    'Cookie' => implode('; ', $cookieStrings),
                 ]);
-                
+
                 Log::info('Using session cookies for ANAF request', [
                     'endpoint' => $endpoint,
                     'cookie_names' => array_keys($sessionCookies),
                     'anaf_cookie_count' => count($cookieStrings),
-                    'cookie_string_preview' => substr(implode('; ', $cookieStrings), 0, 100) . '...'
+                    'cookie_string_preview' => substr(implode('; ', $cookieStrings), 0, 100).'...',
                 ]);
             }
         } else {
             Log::warning('No session cookies available for ANAF request', [
                 'endpoint' => $endpoint,
-                'session_active' => $this->isSessionActive()
+                'session_active' => $this->isSessionActive(),
             ]);
         }
 
@@ -388,49 +403,124 @@ class AnafSpvService
         if (count($cookies) > 0) {
             $cookieArray = [];
             $hasDeletedCookies = false;
-            
+
             foreach ($cookies as $cookie) {
                 $cookieValue = $cookie->getValue();
                 $cookieArray[$cookie->getName()] = $cookieValue;
-                
+
                 // Check if ANAF is deleting session cookies (indicating session expired)
                 if ($cookieValue === 'deleted' || strpos($cookieValue, 'deleted') !== false) {
                     $hasDeletedCookies = true;
                 }
             }
-            
+
             // If ANAF is deleting cookies, clear our session cache
             if ($hasDeletedCookies) {
                 Log::info('ANAF session expired - clearing cache', [
-                    'deleted_cookies' => array_keys($cookieArray)
+                    'deleted_cookies' => array_keys($cookieArray),
                 ]);
                 $this->clearSession();
             } else {
                 // Only store new cookies if they're not deletion markers
                 Cache::put(self::SESSION_CACHE_KEY, $cookieArray, self::SESSION_TIMEOUT);
-                
+
                 // Store expiry time for better session management
-                Cache::put(self::SESSION_CACHE_KEY . ':expire_time', now()->addSeconds(self::SESSION_TIMEOUT)->timestamp, self::SESSION_TIMEOUT + 60);
-                
+                Cache::put(self::SESSION_CACHE_KEY.':expire_time', now()->addSeconds(self::SESSION_TIMEOUT)->timestamp, self::SESSION_TIMEOUT + 60);
+
                 Log::info('ANAF session cookies stored', [
                     'cookie_count' => count($cookieArray),
                     'cookie_names' => array_keys($cookieArray),
-                    'expires_at' => now()->addSeconds(self::SESSION_TIMEOUT)->toDateTimeString()
+                    'expires_at' => now()->addSeconds(self::SESSION_TIMEOUT)->toDateTimeString(),
                 ]);
             }
         }
 
+        // Track errors if response failed
+        if ($response->failed()) {
+            $tracker = $this->getApiTracker();
+            $errorMessage = "API call #{$tracker['calls_made']} failed - Status: {$response->status()}, Endpoint: {$endpoint}";
+            $this->addApiError($errorMessage);
+            Log::error($errorMessage);
+        }
+
+        $updatedTracker = $this->getApiTracker();
         Log::info('ANAF SPV API Response', [
             'status' => $response->status(),
             'headers' => $response->headers(),
+            'api_calls_remaining' => $updatedTracker['calls_remaining'],
         ]);
 
         return $response;
     }
 
+    private function getApiTracker(): array
+    {
+        $tracker = Cache::get(self::API_TRACKER_CACHE_KEY);
+
+        // Initialize if not exists or reset if expired
+        if (! $tracker || (isset($tracker['reset_at']) && Carbon::parse($tracker['reset_at'])->isPast())) {
+            $tracker = [
+                'calls_made' => 0,
+                'calls_limit' => 100,
+                'calls_remaining' => 100,
+                'errors' => [],
+                'reset_at' => now()->addHours(24)->toIso8601String(),
+            ];
+            Cache::put(self::API_TRACKER_CACHE_KEY, $tracker, 86400); // 24 hours
+        }
+
+        return $tracker;
+    }
+
+    private function incrementApiCalls(): void
+    {
+        $tracker = $this->getApiTracker();
+        $tracker['calls_made']++;
+        $tracker['calls_remaining'] = max(0, $tracker['calls_limit'] - $tracker['calls_made']);
+        Cache::put(self::API_TRACKER_CACHE_KEY, $tracker, 86400);
+    }
+
+    private function addApiError(string $error): void
+    {
+        $tracker = $this->getApiTracker();
+        $tracker['errors'][] = [
+            'error' => $error,
+            'timestamp' => now()->toIso8601String(),
+            'call_number' => $tracker['calls_made'],
+        ];
+        // Keep only last 10 errors
+        $tracker['errors'] = array_slice($tracker['errors'], -10);
+        Cache::put(self::API_TRACKER_CACHE_KEY, $tracker, 86400);
+    }
+
+    public function getApiCallStatus(): array
+    {
+        $tracker = $this->getApiTracker();
+
+        return [
+            'calls_made' => $tracker['calls_made'],
+            'calls_limit' => $tracker['calls_limit'],
+            'calls_remaining' => $tracker['calls_remaining'],
+            'reset_at' => $tracker['reset_at'],
+            'recent_errors' => array_slice($tracker['errors'], -5), // Last 5 errors
+        ];
+    }
+
+    public function resetApiCallCounter(): void
+    {
+        $tracker = [
+            'calls_made' => 0,
+            'calls_limit' => 100,
+            'calls_remaining' => 100,
+            'errors' => [],
+            'reset_at' => now()->addHours(24)->toIso8601String(),
+        ];
+        Cache::put(self::API_TRACKER_CACHE_KEY, $tracker, 86400);
+    }
+
     public function getAuthenticationUrl(int $days = 60): string
     {
-        return self::BASE_URL . '/listaMesaje?zile=' . $days;
+        return self::BASE_URL.'/listaMesaje?zile='.$days;
     }
 
     public function setSessionFromBrowser(array $cookies): void
@@ -449,43 +539,45 @@ class AnafSpvService
             // Validate that we have the necessary ANAF cookies
             $requiredCookies = ['JSESSIONID', 'MRHSession', 'F5_ST', 'LastMRH_Session']; // ANAF session cookies
             $hasRequired = false;
-            
+
             foreach ($cookies as $name => $value) {
                 if (in_array($name, $requiredCookies) || str_contains($name, 'session') || str_contains($name, 'JSESSION') || str_contains($name, 'MRH')) {
                     $hasRequired = true;
                     break;
                 }
             }
-            
-            if (!$hasRequired) {
+
+            if (! $hasRequired) {
                 Log::warning('No valid ANAF session cookies found', ['cookies' => array_keys($cookies)]);
+
                 return false;
             }
-            
+
             // Store cookies and metadata in cache
             $sessionData = [
                 'cookies' => $cookies,
                 'source' => $source,
                 'imported_at' => now()->toDateTimeString(),
-                'expires_at' => now()->addSeconds(self::SESSION_TIMEOUT)->timestamp
+                'expires_at' => now()->addSeconds(self::SESSION_TIMEOUT)->timestamp,
             ];
-            
+
             Cache::put(self::SESSION_CACHE_KEY, $sessionData, self::SESSION_TIMEOUT);
-            
+
             // Store expiry time for imported session
-            Cache::put(self::SESSION_CACHE_KEY . ':expire_time', now()->addSeconds(self::SESSION_TIMEOUT)->timestamp, self::SESSION_TIMEOUT + 60);
-            
+            Cache::put(self::SESSION_CACHE_KEY.':expire_time', now()->addSeconds(self::SESSION_TIMEOUT)->timestamp, self::SESSION_TIMEOUT + 60);
+
             Log::info('ANAF session cookies imported successfully', [
                 'cookie_count' => count($cookies),
                 'cookie_names' => array_keys($cookies),
                 'source' => $source,
-                'expires_at' => now()->addSeconds(self::SESSION_TIMEOUT)->toDateTimeString()
+                'expires_at' => now()->addSeconds(self::SESSION_TIMEOUT)->toDateTimeString(),
             ]);
-            
+
             return true;
-            
+
         } catch (\Exception $e) {
             Log::error('Failed to import session cookies', ['error' => $e->getMessage()]);
+
             return false;
         }
     }
@@ -494,9 +586,23 @@ class AnafSpvService
     {
         try {
             // Make a simple test call to verify session works
-            $response = $this->getMessagesList(1);
-            return !empty($response);
+            $response = $this->getMessagesList(60);
+
+            // Session is valid if we get a proper response structure
+            // Even if there are no messages, ANAF should return a valid array
+            return is_array($response) && (
+                isset($response['mesaje']) || // Normal response with messages array
+                isset($response['cnp']) ||    // Response with CNP (valid auth)
+                isset($response['cui'])       // Response with CUI (valid auth)
+            );
         } catch (\Exception $e) {
+            // If the exception contains "Nu exista mesaje" it means auth worked but no messages
+            if (str_contains($e->getMessage(), 'Nu exista mesaje')) {
+                return true;
+            }
+
+            Log::debug('Session test failed', ['error' => $e->getMessage()]);
+
             return false;
         }
     }
@@ -508,18 +614,18 @@ class AnafSpvService
 
     public function getSessionExpiryTime(): ?Carbon
     {
-        if (!$this->isSessionActive()) {
+        if (! $this->isSessionActive()) {
             return null;
         }
 
         // Get the cache store and calculate expiry time
         $cacheStore = Cache::getStore();
-        $expiryTime = $cacheStore->get(self::SESSION_CACHE_KEY . ':expire_time', 0);
-        
+        $expiryTime = $cacheStore->get(self::SESSION_CACHE_KEY.':expire_time', 0);
+
         if ($expiryTime > 0) {
             return Carbon::createFromTimestamp($expiryTime);
         }
-        
+
         // Fallback: estimate expiry based on session timeout
         return now()->addSeconds(self::SESSION_TIMEOUT);
     }
@@ -527,38 +633,41 @@ class AnafSpvService
     public function getSessionRemainingTime(): ?int
     {
         $expiryTime = $this->getSessionExpiryTime();
-        
-        if (!$expiryTime) {
+
+        if (! $expiryTime) {
             return null;
         }
-        
+
         $remaining = now()->diffInSeconds($expiryTime, false);
+
         return max(0, (int) $remaining);
     }
 
     public function isSessionExpiringSoon(int $thresholdMinutes = 30): bool
     {
         $remaining = $this->getSessionRemainingTime();
-        
+
         if ($remaining === null) {
             return false;
         }
-        
+
         return $remaining <= ($thresholdMinutes * 60);
     }
 
     public function refreshSession(): bool
     {
-        if (!$this->isSessionActive()) {
+        if (! $this->isSessionActive()) {
             return false;
         }
 
         try {
             // Make a lightweight request to refresh the session
-            $this->makeRequest('listaMesaje', ['zile' => 1]);
+            $this->makeRequest('listaMesaje', ['zile' => 60]);
+
             return true;
         } catch (\Exception $e) {
             Log::warning('Failed to refresh ANAF session', ['error' => $e->getMessage()]);
+
             return false;
         }
     }
@@ -568,11 +677,11 @@ class AnafSpvService
         $remainingSeconds = $this->getSessionRemainingTime();
         $isActive = $this->isSessionActive() && $remainingSeconds > 0;
         $sessionData = Cache::get(self::SESSION_CACHE_KEY, []);
-        
+
         // Handle both old and new format
         $cookies = is_array($sessionData) && isset($sessionData['cookies']) ? $sessionData['cookies'] : $sessionData;
         $source = is_array($sessionData) && isset($sessionData['source']) ? $sessionData['source'] : 'unknown';
-        
+
         return [
             'active' => $isActive,
             'expires_at' => $this->getSessionExpiryTime()?->toDateTimeString(),
@@ -597,13 +706,13 @@ class AnafSpvService
             'available' => true,
             'type' => 'Session Cookies',
             'description' => 'Browser extension or manual session cookie import',
-            'status' => 'Always available'
+            'status' => 'Always available',
         ];
 
         return [
             'has_automated_auth' => false, // No automated auth - relies on extension
             'methods' => $methods,
-            'session' => $this->getSessionStatus()
+            'session' => $this->getSessionStatus(),
         ];
     }
 
@@ -611,24 +720,26 @@ class AnafSpvService
 
     public function validateSession(): bool
     {
-        if (!$this->isSessionActive()) {
+        if (! $this->isSessionActive()) {
             return false;
         }
 
         try {
             // Try a simple request to validate the session
-            $response = $this->makeRequest('listaMesaje', ['zile' => 1]);
-            
+            $response = $this->makeRequest('listaMesaje', ['zile' => 60]);
+
             // Check if we got an authentication error response
             $contentType = $response->header('Content-Type', '');
             if (str_contains($contentType, 'text/html') || str_contains($response->body(), '<html>')) {
                 $this->clearSession();
+
                 return false;
             }
-            
+
             return true;
         } catch (\Exception $e) {
             $this->clearSession();
+
             return false;
         }
     }
