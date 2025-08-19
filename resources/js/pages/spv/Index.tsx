@@ -76,6 +76,10 @@ const breadcrumbs: BreadcrumbItem[] = [
         title: 'SPV',
         href: '/spv',
     },
+    {
+        title: 'Mesaje',
+        href: '/spv',
+    },
 ]
 
 export default function SpvIndex({ 

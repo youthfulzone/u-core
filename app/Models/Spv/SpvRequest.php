@@ -7,6 +7,7 @@ use MongoDB\Laravel\Eloquent\Model;
 class SpvRequest extends Model
 {
     protected $connection = 'mongodb';
+
     protected $collection = 'spv_requests';
 
     protected $fillable = [
@@ -14,6 +15,9 @@ class SpvRequest extends Model
         'anaf_id_solicitare',
         'tip',
         'cui',
+        'cif',
+        'document_type',
+        'company_name',
         'an',
         'luna',
         'motiv',
@@ -38,7 +42,9 @@ class SpvRequest extends Model
     }
 
     public const STATUS_PENDING = 'pending';
+
     public const STATUS_PROCESSED = 'processed';
+
     public const STATUS_ERROR = 'error';
 
     public function user()

@@ -6,6 +6,15 @@
                 "./artisan",
                 "boost:mcp"
             ]
+        },
+        "herd": {
+            "command": "php",
+            "args": [
+                "C:/Users/TheOldBuffet/.config/herd/bin/herd-mcp.phar"
+            ],
+            "env": {
+                "SITE_PATH": "C:\\Users\\TheOldBuffet\\Herd\\u-core"
+            }
         }
     }
 }
