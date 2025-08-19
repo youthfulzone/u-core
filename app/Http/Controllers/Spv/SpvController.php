@@ -45,7 +45,7 @@ class SpvController extends Controller
 
         // Get basic session status without triggering any API calls
         $sessionStatus = $this->spvService->getSessionStatus();
-        
+
         // Create minimal authentication status to avoid any hidden API calls
         $authStatus = [
             'has_automated_auth' => false,
@@ -55,7 +55,7 @@ class SpvController extends Controller
                     'type' => 'Session Cookies',
                     'description' => 'Browser extension or manual session cookie import',
                     'status' => 'Always available',
-                ]
+                ],
             ],
             'session' => $sessionStatus,
         ];
@@ -70,6 +70,8 @@ class SpvController extends Controller
             'documentTypes' => $this->spvService->getAvailableDocumentTypes(),
             'incomeReasons' => $this->spvService->getIncomeStatementReasons(),
             'apiCallStatus' => $apiCallStatus,
+            'sessionValidated' => $authStatus['session']['validated'] ?? false,
+            'authenticationStatusText' => $authStatus['session']['authentication_status'] ?? 'not_authenticated',
         ]);
     }
 
@@ -536,7 +538,7 @@ class SpvController extends Controller
         try {
             // Get basic session status without triggering any API calls
             $sessionStatus = $this->spvService->getSessionStatus();
-            
+
             // Create minimal authentication status to avoid any hidden API calls
             $authStatus = [
                 'has_automated_auth' => false,
@@ -546,7 +548,7 @@ class SpvController extends Controller
                         'type' => 'Session Cookies',
                         'description' => 'Browser extension or manual session cookie import',
                         'status' => 'Always available',
-                    ]
+                    ],
                 ],
                 'session' => $sessionStatus,
             ];

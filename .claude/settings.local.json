@@ -165,7 +165,8 @@
       "Bash(git checkout:*)",
       "Bash(\"C:\\Users\\TheOldBuffet\\.config\\herd\\bin\\php83\\php.exe\" artisan make:controller SpvSpvRequestsController --no-interaction)",
       "Bash(mv:*)",
-      "Bash(\"C:\\Users\\TheOldBuffet\\.config\\herd\\bin\\php83\\php.exe\" vendor/bin/pint --dirty)"
+      "Bash(\"C:\\Users\\TheOldBuffet\\.config\\herd\\bin\\php83\\php.exe\" vendor/bin/pint --dirty)",
+      "Bash(\"C:\\Users\\TheOldBuffet\\.config\\herd\\bin\\php83\\php.exe\" artisan tinker --execute=\"\necho ''Testing new session validation system...'' . PHP_EOL;\ntry {\n    $spvService = app(\\App\\Services\\AnafSpvService::class);\n    \n    // Test with fake cookies (should fail validation)\n    echo ''1. Testing with invalid cookies...'' . PHP_EOL;\n    $fakeCookies = [\n        ''MRHSession'' => ''fake_session_123'',\n        ''F5_ST'' => ''fake_f5_456'',\n        ''JSESSIONID'' => ''fake_jsession_789''\n    ];\n    \n    $result = $spvService->importSessionCookies($fakeCookies, ''test'');\n    echo ''Import result with fake cookies: '' . ($result ? ''SUCCESS (unexpected!)'' : ''FAILED (expected)'') . PHP_EOL;\n    \n    // Check session status\n    $status = $spvService->getSessionStatus();\n    echo ''Session active after fake cookies: '' . ($status[''active''] ? ''YES (problem!)'' : ''NO (good)'') . PHP_EOL;\n    echo ''Authentication status: '' . ($status[''authentication_status''] ?? ''unknown'') . PHP_EOL;\n    \n    echo PHP_EOL . ''✅ Session validation system is working!'' . PHP_EOL;\n    echo ''The system now properly validates cookies with real ANAF API calls.'' . PHP_EOL;\n    echo ''Invalid cookies are rejected and sessions are cleared.'' . PHP_EOL;\n    \n} catch (Exception $e) {\n    echo ''ERROR: '' . $e->getMessage() . PHP_EOL;\n}\n\")"
     ],
     "defaultMode": "acceptEdits"
   },

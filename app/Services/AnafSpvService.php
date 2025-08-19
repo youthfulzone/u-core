@@ -553,7 +553,7 @@ class AnafSpvService
                 return false;
             }
 
-            // Store cookies and metadata in cache
+            // Temporarily store cookies to test them
             $sessionData = [
                 'cookies' => $cookies,
                 'source' => $source,
@@ -563,20 +563,39 @@ class AnafSpvService
 
             Cache::put(self::SESSION_CACHE_KEY, $sessionData, self::SESSION_TIMEOUT);
 
-            // Store expiry time for imported session
+            // Validate session with real ANAF API call
+            $isValid = $this->validateSession();
+
+            if (! $isValid) {
+                Log::warning('ANAF session validation failed - cookies do not provide valid authentication', [
+                    'cookie_names' => array_keys($cookies),
+                    'source' => $source,
+                ]);
+
+                // Clear the invalid session
+                $this->clearSession();
+
+                return false;
+            }
+
+            // Store expiry time for validated session
             Cache::put(self::SESSION_CACHE_KEY.':expire_time', now()->addSeconds(self::SESSION_TIMEOUT)->timestamp, self::SESSION_TIMEOUT + 60);
 
-            Log::info('ANAF session cookies imported successfully', [
+            Log::info('ANAF session cookies imported and validated successfully', [
                 'cookie_count' => count($cookies),
                 'cookie_names' => array_keys($cookies),
                 'source' => $source,
                 'expires_at' => now()->addSeconds(self::SESSION_TIMEOUT)->toDateTimeString(),
+                'validation_status' => 'passed',
             ]);
 
             return true;
 
         } catch (\Exception $e) {
             Log::error('Failed to import session cookies', ['error' => $e->getMessage()]);
+
+            // Make sure to clear any partially stored session
+            $this->clearSession();
 
             return false;
         }
@@ -587,12 +606,12 @@ class AnafSpvService
         // Simply check if session is active in cache - no API calls
         // Session validity will be verified when actually needed (during sync)
         $isActive = $this->isSessionActive();
-        
+
         Log::info('Session test completed without API call', [
             'session_active' => $isActive,
-            'method' => 'cache_check_only'
+            'method' => 'cache_check_only',
         ]);
-        
+
         return $isActive;
     }
 
@@ -673,6 +692,7 @@ class AnafSpvService
 
         return [
             'active' => $isActive,
+            'validated' => $isActive, // Since we now validate on import, active sessions are validated
             'expires_at' => $this->getSessionExpiryTime()?->toDateTimeString(),
             'remaining_seconds' => $remainingSeconds,
             'remaining_minutes' => $remainingSeconds ? round($remainingSeconds / 60, 1) : null,
@@ -680,6 +700,7 @@ class AnafSpvService
             'cookie_names' => $isActive ? array_keys($cookies) : [],
             'source' => $source,
             'imported_at' => is_array($sessionData) && isset($sessionData['imported_at']) ? $sessionData['imported_at'] : null,
+            'authentication_status' => $isActive ? 'authenticated' : 'not_authenticated',
         ];
     }
 
