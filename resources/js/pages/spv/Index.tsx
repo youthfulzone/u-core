@@ -626,7 +626,7 @@ După autentificare, apăsați din nou "Sincronizare mesaje ANAF".`)
     })
 
     // Pagination calculations
-    const totalPages = Math.ceil(filteredMessages.length / messagesPerPage)
+    const totalPages = Math.max(1, Math.ceil(filteredMessages.length / messagesPerPage))
     const startIndex = (currentPage - 1) * messagesPerPage
     const endIndex = startIndex + messagesPerPage
     const paginatedMessages = filteredMessages.slice(startIndex, endIndex)
@@ -786,25 +786,9 @@ După autentificare, apăsați din nou "Sincronizare mesaje ANAF".`)
                                                 <tbody className={`transition-opacity duration-200 ease-in-out ${isTableUpdating ? 'opacity-50' : 'opacity-100'}`}>
                                                     {paginatedMessages.length === 0 ? (
                                                         <tr className="border-b bg-muted/5">
-                                                            <td colSpan={5} className="p-8 text-center">
-                                                                <div className="flex flex-col items-center gap-3">
-                                                                    <Icon iconNode={Mail} className="h-8 w-8 text-muted-foreground" />
-                                                                    <div>
-                                                                        <p className="text-muted-foreground font-medium">
-                                                                            Nu au fost găsite mesaje pentru criteriile selectate
-                                                                        </p>
-                                                                        <p className="text-sm text-muted-foreground mt-1">
-                                                                            {tableFilter && documentTypeFilter !== 'all' 
-                                                                                ? `Filtru CIF: "${tableFilter}" și Tip: "${getDocumentTypeDisplay(documentTypeFilter)}"` 
-                                                                                : tableFilter 
-                                                                                ? `Filtru CIF: "${tableFilter}"` 
-                                                                                : `Tip document: "${getDocumentTypeDisplay(documentTypeFilter)}"`
-                                                                            }
-                                                                        </p>
-                                                                        <p className="text-xs text-muted-foreground mt-2">
-                                                                            Modificați filtrele pentru a vedea alte mesaje
-                                                                        </p>
-                                                                    </div>
+                                                            <td colSpan={5} className="p-4 text-center">
+                                                                <div className="text-sm leading-relaxed h-12 overflow-hidden flex items-center justify-center">
+                                                                    <div className="text-muted-foreground font-medium">Nu au fost găsite mesaje pentru criteriile selectate</div>
                                                                 </div>
                                                             </td>
                                                         </tr>
@@ -833,21 +817,15 @@ După autentificare, apăsați din nou "Sincronizare mesaje ANAF".`)
                                                                 </div>
                                                             </td>
                                                             <td className="p-4 align-top w-[300px]">
-                                                                <div className="text-sm leading-relaxed">
+                                                                <div className="text-sm leading-relaxed h-12 overflow-hidden">
                                                                     <div className="line-clamp-3">{message.detalii}</div>
                                                                 </div>
-                                                                {message.downloaded_at && (
-                                                                    <Badge variant="outline" className="text-green-600 mt-2">
-                                                                        <Icon iconNode={Download} className="w-3 h-3 mr-1" />
-                                                                        Descărcat
-                                                                    </Badge>
-                                                                )}
                                                             </td>
                                                             <td className="p-4 align-top w-[150px]">
                                                                 <Button
                                                                     onClick={() => handleDownload(message.anaf_id)}
                                                                     size="sm"
-                                                                    variant={message.downloaded_at ? "outline" : "default"}
+                                                                    variant="outline"
                                                                     className="whitespace-nowrap"
                                                                 >
                                                                     <Icon iconNode={Download} className="w-4 h-4 mr-2" />
@@ -857,12 +835,38 @@ După autentificare, apăsați din nou "Sincronizare mesaje ANAF".`)
                                                         </tr>
                                                     ))
                                                     )}
+                                                    
+                                                    {/* Empty placeholder rows to maintain consistent table height */}
+                                                    {Array.from({ length: messagesPerPage - paginatedMessages.length - (paginatedMessages.length === 0 ? 1 : 0) }, (_, i) => (
+                                                        <tr key={`empty-${i}`} className={`border-b ${(paginatedMessages.length + i) % 2 === 0 ? 'bg-background' : 'bg-muted/10'}`}>
+                                                            <td className="p-4 align-top w-[200px]">
+                                                                <div className="space-y-1">
+                                                                    <div className="font-semibold text-sm truncate">&nbsp;</div>
+                                                                    <div className="text-xs text-muted-foreground truncate">&nbsp;</div>
+                                                                </div>
+                                                            </td>
+                                                            <td className="p-4 align-top w-[180px]">
+                                                                <div className="whitespace-nowrap">&nbsp;</div>
+                                                            </td>
+                                                            <td className="p-4 align-top w-[140px]">
+                                                                <div className="text-sm font-medium">&nbsp;</div>
+                                                            </td>
+                                                            <td className="p-4 align-top w-[300px]">
+                                                                <div className="text-sm leading-relaxed h-12 overflow-hidden">
+                                                                    <div className="line-clamp-3">&nbsp;</div>
+                                                                </div>
+                                                            </td>
+                                                            <td className="p-4 align-top w-[150px]">
+                                                                <div className="whitespace-nowrap">&nbsp;</div>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
                                                 </tbody>
                                             </table>
                             </div>
                             
                             {/* Pagination Controls */}
-                            {totalPages > 1 && (
+                            {(
                                 <div className="flex items-center justify-between border-t bg-muted/20 px-4 py-3 rounded-b-lg">
                                     <div className="flex items-center text-sm text-muted-foreground">
                                         <span>
