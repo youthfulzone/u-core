@@ -46,8 +46,9 @@ let extensionStatus = {
 // Create a global API that the web app can use (only on authorized domains)
 if (validateDomain()) {
     window.anafCookieHelper = {
-        version: '1.0.3',
+        version: '1.0.5',
         isExtensionActive: true,
+        enhanced: true,
     
     // Get ANAF cookies - returns a Promise
     async getCookies() {
@@ -299,17 +300,106 @@ if (validateDomain()) {
         } catch (error) {
             return 0;
         }
+    },
+    
+    // Enhanced status monitoring
+    async getDetailedStatus() {
+        if (!validateDomain()) {
+            return { 
+                error: 'Domain not authorized',
+                authorized: false,
+                domain: window.location.hostname
+            };
+        }
+        
+        try {
+            // Get current extension status from background script
+            const response = await chrome.runtime.sendMessage({
+                action: 'getDetailedStatus'
+            });
+            
+            if (response && response.success) {
+                return {
+                    ...response.status,
+                    authorized: true,
+                    domain: window.location.hostname,
+                    version: this.version,
+                    enhanced: true
+                };
+            } else {
+                return {
+                    error: response?.error || 'Failed to get status',
+                    authorized: true,
+                    domain: window.location.hostname
+                };
+            }
+        } catch (error) {
+            return {
+                error: error.message,
+                authorized: true,
+                domain: window.location.hostname,
+                connectionFailed: true
+            };
+        }
+    },
+    
+    // Real-time sync status monitoring
+    startSyncMonitoring(callback) {
+        if (!validateDomain()) {
+            return false;
+        }
+        
+        console.log('🔄 Starting real-time sync monitoring...');
+        
+        // Set up storage listener for sync status changes
+        const handleStorageChange = (changes, areaName) => {
+            if (areaName === 'local' && changes.lastSyncStatus) {
+                const newStatus = changes.lastSyncStatus.newValue;
+                const oldStatus = changes.lastSyncStatus.oldValue;
+                
+                if (newStatus !== oldStatus) {
+                    console.log(`📊 Sync status changed: ${oldStatus} → ${newStatus}`);
+                    
+                    if (callback && typeof callback === 'function') {
+                        callback({
+                            oldStatus: oldStatus,
+                            newStatus: newStatus,
+                            timestamp: Date.now()
+                        });
+                    }
+                    
+                    // Also dispatch a custom event
+                    window.dispatchEvent(new CustomEvent('anaf-sync-status-changed', {
+                        detail: {
+                            oldStatus: oldStatus,
+                            newStatus: newStatus,
+                            timestamp: Date.now(),
+                            version: this.version
+                        }
+                    }));
+                }
+            }
+        };
+        
+        chrome.storage.onChanged.addListener(handleStorageChange);
+        
+        // Return cleanup function
+        return () => {
+            chrome.storage.onChanged.removeListener(handleStorageChange);
+        };
     }
     };
 
     // Notify the page that the extension API is available
     window.dispatchEvent(new CustomEvent('anaf-extension-loaded', {
         detail: {
-            version: '1.0.3',
+            version: '1.0.5',
             api: 'window.anafCookieHelper',
             timestamp: new Date().toISOString(),
             authorized: true,
-            domain: window.location.hostname
+            domain: window.location.hostname,
+            enhanced: true,
+            features: ['getCookies', 'syncCookies', 'checkAnafAuth', 'getDetailedStatus', 'startSyncMonitoring']
         }
     }));
 
@@ -340,7 +430,7 @@ if (validateDomain()) {
     // For unauthorized domains, dispatch a blocked event
     window.dispatchEvent(new CustomEvent('anaf-extension-blocked', {
         detail: {
-            version: '1.0.3',
+            version: '1.0.5',
             authorized: false,
             domain: window.location.hostname,
             reason: 'Domain not in allowed list'
@@ -355,10 +445,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (validateDomain()) {
             window.dispatchEvent(new CustomEvent('anaf-extension-ready', {
                 detail: {
-                    version: '1.0.3',
+                    version: '1.0.5',
                     timestamp: new Date().toISOString(),
                     authorized: true,
-                    domain: window.location.hostname
+                    domain: window.location.hostname,
+                    enhanced: true
                 }
             }));
         }

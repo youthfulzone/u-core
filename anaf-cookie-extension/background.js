@@ -1,145 +1,283 @@
 // Background service worker for ANAF Cookie Helper
+// Enhanced version with improved error handling and retry logic
 
-// Monitor cookie changes ONLY for webserviced.anaf.ro
+let syncInProgress = false;
+let lastSyncAttempt = 0;
+const MIN_SYNC_INTERVAL = 5000; // Minimum 5 seconds between sync attempts
+const MAX_RETRY_ATTEMPTS = 3;
+const RETRY_DELAY_BASE = 2000; // Base delay for exponential backoff
+
+// Enhanced cookie change monitoring
 chrome.cookies.onChanged.addListener((changeInfo) => {
   const cookie = changeInfo.cookie;
   
   // Check if it's specifically a webserviced.anaf.ro cookie
   if (cookie.domain === 'webserviced.anaf.ro' || cookie.domain === '.webserviced.anaf.ro') {
-    console.log('webserviced.anaf.ro cookie changed:', cookie.name, cookie.domain);
+    console.log('[ANAF Extension] Cookie changed:', cookie.name, cookie.domain, 
+                changeInfo.removed ? '(removed)' : '(added/updated)');
     
-    // If it's a key ANAF session cookie, auto-sync
-    const keyCookies = ['MRHSession', 'F5_ST', 'LastMRH_Session'];
-    if (keyCookies.includes(cookie.name)) {
-      console.log('Key webserviced.anaf.ro cookie detected, auto-syncing...');
-      syncCookiesToApp();
+    // Only sync on cookie additions/updates, not removals
+    if (!changeInfo.removed) {
+      // If it's a key ANAF session cookie, auto-sync with rate limiting
+      const keyCookies = ['MRHSession', 'F5_ST', 'LastMRH_Session', 'JSESSIONID'];
+      if (keyCookies.includes(cookie.name)) {
+        console.log('[ANAF Extension] Key cookie detected, scheduling auto-sync...');
+        scheduleSync('cookie_change', cookie.name);
+      }
     }
   }
 });
 
-// Auto-sync cookies when webserviced.anaf.ro pages are loaded
+// Enhanced page load monitoring
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url && tab.url.startsWith('https://webserviced.anaf.ro/')) {
-    console.log('webserviced.anaf.ro page loaded, checking for cookies...');
+    console.log('[ANAF Extension] ANAF page loaded, scheduling cookie check...');
+    // Wait for page to fully load and cookies to be set
     setTimeout(() => {
-      syncCookiesToApp();
-    }, 2000); // Wait 2 seconds for cookies to be set
+      scheduleSync('page_load', tab.url);
+    }, 3000);
   }
 });
 
-// Function to sync cookies to the Laravel app
-async function syncCookiesToApp() {
+// Smart sync scheduling with rate limiting
+function scheduleSync(trigger, detail) {
+  const now = Date.now();
+  
+  // Rate limiting: don't sync too frequently
+  if (now - lastSyncAttempt < MIN_SYNC_INTERVAL) {
+    console.log('[ANAF Extension] Sync rate limited, skipping:', trigger);
+    return;
+  }
+  
+  // Prevent concurrent syncs
+  if (syncInProgress) {
+    console.log('[ANAF Extension] Sync already in progress, skipping:', trigger);
+    return;
+  }
+  
+  console.log('[ANAF Extension] Scheduled sync triggered by:', trigger, detail);
+  syncCookiesToApp(trigger);
+}
+
+// Enhanced function to sync cookies to the Laravel app with retry logic
+async function syncCookiesToApp(trigger = 'manual', retryCount = 0) {
+  // Set sync in progress flag
+  syncInProgress = true;
+  lastSyncAttempt = Date.now();
+  
   try {
+    console.log(`[ANAF Extension] Starting sync attempt ${retryCount + 1}/${MAX_RETRY_ATTEMPTS + 1} (trigger: ${trigger})`);
+    
     // Get ONLY webserviced.anaf.ro cookies
     const webservicedCookies = await chrome.cookies.getAll({domain: "webserviced.anaf.ro"});
     
     if (webservicedCookies.length === 0) {
-      console.log('No webserviced.anaf.ro cookies found');
+      console.log('[ANAF Extension] No webserviced.anaf.ro cookies found');
+      await updateSyncStatus('no_cookies', 'No ANAF cookies found');
       return;
     }
     
-    // Filter to only include session cookies and essential ones
-    const sessionCookies = webservicedCookies.filter(cookie => {
+    // Enhanced cookie filtering with better logic
+    const relevantCookies = webservicedCookies.filter(cookie => {
       // Include session cookies (no expiration date) and key ANAF cookies
       const isSessionCookie = cookie.session;
-      const isKeyCookie = ['MRHSession', 'F5_ST', 'LastMRH_Session'].includes(cookie.name);
-      const isAnalyticsCookie = cookie.name.startsWith('_ga') || cookie.name.startsWith('AMP_');
+      const isKeyCookie = ['MRHSession', 'F5_ST', 'LastMRH_Session', 'JSESSIONID'].includes(cookie.name);
+      const isRecentCookie = !cookie.expirationDate || (cookie.expirationDate * 1000) > Date.now();
       
-      return isSessionCookie || isKeyCookie || isAnalyticsCookie;
+      return (isSessionCookie || isKeyCookie) && isRecentCookie;
     });
     
-    if (sessionCookies.length === 0) {
-      console.log('No relevant webserviced.anaf.ro session cookies found');
+    if (relevantCookies.length === 0) {
+      console.log('[ANAF Extension] No relevant/valid ANAF cookies found');
+      await updateSyncStatus('invalid_cookies', 'No valid ANAF session cookies found');
       return;
     }
     
     // Format cookies as string (like browser sends them)
-    const cookieString = sessionCookies
+    const cookieString = relevantCookies
       .map(cookie => `${cookie.name}=${cookie.value}`)
       .join('; ');
     
-    console.log('Syncing webserviced.anaf.ro cookies to app:', sessionCookies.length, 'cookies');
+    console.log(`[ANAF Extension] Syncing ${relevantCookies.length} cookies to app:`, 
+                relevantCookies.map(c => c.name).join(', '));
     
     // Get app URL from storage or use default
-    const result = await chrome.storage.sync.get(['appUrl']);
-    const appUrl = result.appUrl || 'https://u-core.test';
+    const storage = await chrome.storage.sync.get(['appUrl']);
+    const appUrl = storage.appUrl || 'https://u-core.test';
     
-    // Send cookies to Laravel app
-    console.log('Sending cookies to:', `${appUrl}/api/anaf/extension-cookies`);
+    // Enhanced request with timeout and better headers
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+    
+    console.log(`[ANAF Extension] Sending to: ${appUrl}/api/anaf/extension-cookies`);
+    
+    const requestData = {
+      cookies: cookieString,
+      timestamp: Date.now(),
+      source: 'browser_extension_enhanced',
+      trigger: trigger,
+      cookie_count: relevantCookies.length,
+      user_agent: navigator.userAgent,
+      extension_version: '1.0.5'
+    };
     
     const response = await fetch(`${appUrl}/api/anaf/extension-cookies`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'X-Extension-Version': '1.0.5',
+        'X-Sync-Trigger': trigger
       },
-      body: JSON.stringify({
-        cookies: cookieString,
-        timestamp: Date.now(),
-        source: 'browser_extension'
-      })
+      body: JSON.stringify(requestData),
+      signal: controller.signal
     });
+    
+    clearTimeout(timeoutId);
     
     if (response.ok) {
       const data = await response.json();
-      console.log('Cookies synced successfully:', data);
+      console.log(`[ANAF Extension] ✅ Sync successful:`, data);
       
-      // Store last sync time and success details
-      await chrome.storage.local.set({
-        lastSync: Date.now(),
-        lastSyncStatus: 'success',
-        lastSyncMessage: data.message || 'Cookies synced successfully',
-        cookieCount: data.cookie_count || sessionCookies.length
+      // Store enhanced success details
+      await updateSyncStatus('success', data.message || 'Cookies synced successfully', {
+        cookieCount: data.cookie_count || relevantCookies.length,
+        trigger: trigger,
+        retryCount: retryCount,
+        syncDuration: Date.now() - lastSyncAttempt,
+        serverResponse: data
       });
+      
+      // Clear any previous error states
+      await chrome.storage.local.remove(['lastError', 'errorCode', 'errorDetails']);
+      
     } else {
-      // Get detailed error response
+      // Enhanced error handling with retry logic
       let errorDetails = `HTTP ${response.status} - ${response.statusText}`;
+      let serverErrorData = null;
+      
       try {
-        const errorData = await response.json();
-        errorDetails = errorData.message || errorDetails;
-        console.error('Failed to sync cookies - Server response:', errorData);
+        serverErrorData = await response.json();
+        errorDetails = serverErrorData.message || errorDetails;
+        console.error('[ANAF Extension] Server error response:', serverErrorData);
       } catch (parseError) {
-        // If response is not JSON, use the text
         try {
           const errorText = await response.text();
           errorDetails = errorText || errorDetails;
-          console.error('Failed to sync cookies - Server text:', errorText);
+          console.error('[ANAF Extension] Server text response:', errorText);
         } catch (textError) {
-          console.error('Failed to sync cookies - No response body available');
+          console.error('[ANAF Extension] No response body available');
         }
       }
       
-      console.error('Failed to sync cookies:', response.status, errorDetails);
-      await chrome.storage.local.set({
-        lastSyncStatus: 'error',
-        lastError: errorDetails,
-        lastSync: Date.now(),
-        errorCode: response.status
-      });
+      const shouldRetry = shouldRetryRequest(response.status, retryCount);
+      
+      if (shouldRetry) {
+        console.warn(`[ANAF Extension] ⚠️ Sync failed (${response.status}), retrying in ${calculateRetryDelay(retryCount)}ms...`);
+        
+        // Wait before retry with exponential backoff
+        setTimeout(() => {
+          syncCookiesToApp(trigger, retryCount + 1);
+        }, calculateRetryDelay(retryCount));
+        
+        // Don't update error status yet, we're retrying
+        return;
+      } else {
+        console.error(`[ANAF Extension] ❌ Sync failed permanently:`, response.status, errorDetails);
+        await updateSyncStatus('error', errorDetails, {
+          errorCode: response.status,
+          retryCount: retryCount,
+          serverError: serverErrorData,
+          trigger: trigger
+        });
+      }
     }
     
   } catch (error) {
-    console.error('Error syncing cookies:', error);
+    console.error('[ANAF Extension] ❌ Network/runtime error:', error);
+    
     const errorMessage = error.message || 'Unknown network error';
     const errorType = error.name || 'NetworkError';
+    const isNetworkError = error.name === 'AbortError' || error.message.includes('fetch');
     
-    await chrome.storage.local.set({
-      lastSyncStatus: 'error',
-      lastError: `${errorType}: ${errorMessage}`,
-      lastSync: Date.now(),
-      errorDetails: {
-        type: errorType,
-        message: errorMessage,
-        stack: error.stack
-      }
+    // Retry on network errors
+    if (isNetworkError && retryCount < MAX_RETRY_ATTEMPTS) {
+      console.warn(`[ANAF Extension] ⚠️ Network error, retrying in ${calculateRetryDelay(retryCount)}ms...`);
+      
+      setTimeout(() => {
+        syncCookiesToApp(trigger, retryCount + 1);
+      }, calculateRetryDelay(retryCount));
+      
+      return;
+    }
+    
+    // Permanent failure
+    await updateSyncStatus('error', `${errorType}: ${errorMessage}`, {
+      errorType: errorType,
+      errorMessage: errorMessage,
+      stack: error.stack,
+      retryCount: retryCount,
+      trigger: trigger,
+      isNetworkError: isNetworkError
     });
+    
+  } finally {
+    // Always clear the sync in progress flag
+    syncInProgress = false;
   }
 }
 
-// Message handler for popup and content script communication
+// Enhanced status update function
+async function updateSyncStatus(status, message, details = {}) {
+  const statusData = {
+    lastSync: Date.now(),
+    lastSyncStatus: status,
+    lastSyncMessage: message,
+    ...details
+  };
+  
+  if (status === 'error') {
+    statusData.lastError = message;
+    if (details.errorCode) statusData.errorCode = details.errorCode;
+    if (details.errorType || details.serverError || details.stack) {
+      statusData.errorDetails = {
+        type: details.errorType,
+        message: details.errorMessage,
+        stack: details.stack,
+        serverError: details.serverError,
+        retryCount: details.retryCount,
+        trigger: details.trigger
+      };
+    }
+  }
+  
+  await chrome.storage.local.set(statusData);
+  console.log(`[ANAF Extension] Status updated:`, status, message);
+}
+
+// Determine if we should retry based on error type and retry count
+function shouldRetryRequest(statusCode, retryCount) {
+  if (retryCount >= MAX_RETRY_ATTEMPTS) {
+    return false;
+  }
+  
+  // Retry on temporary server errors
+  const retryableStatuses = [500, 502, 503, 504, 408, 429];
+  return retryableStatuses.includes(statusCode);
+}
+
+// Calculate retry delay with exponential backoff
+function calculateRetryDelay(retryCount) {
+  return RETRY_DELAY_BASE * Math.pow(2, retryCount);
+}
+
+// Enhanced message handler for popup and content script communication
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  console.log('[ANAF Extension] Message received:', request.action, sender.tab ? 'from tab' : 'from popup');
+  
   if (request.action === 'syncCookies') {
-    syncCookiesToApp().then(() => {
-      sendResponse({success: true});
+    // Manual sync triggered from popup
+    syncCookiesToApp('popup_manual').then(() => {
+      sendResponse({success: true, message: 'Sync completed successfully'});
     }).catch(error => {
       sendResponse({success: false, error: error.message});
     });

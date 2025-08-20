@@ -441,6 +441,9 @@ class AnafSpvService
             $errorMessage = "API call #{$tracker['calls_made']} failed - Status: {$response->status()}, Endpoint: {$endpoint}";
             $this->addApiError($errorMessage);
             Log::error($errorMessage);
+        } else {
+            // Mark session as validated on successful API response (lazy validation)
+            $this->markSessionAsValidated();
         }
 
         $updatedTracker = $this->getApiTracker();
@@ -553,40 +556,26 @@ class AnafSpvService
                 return false;
             }
 
-            // Temporarily store cookies to test them
+            // Store cookies WITHOUT validation to avoid API calls
             $sessionData = [
                 'cookies' => $cookies,
                 'source' => $source,
                 'imported_at' => now()->toDateTimeString(),
                 'expires_at' => now()->addSeconds(self::SESSION_TIMEOUT)->timestamp,
+                'validated' => false, // Mark as not validated yet
             ];
 
             Cache::put(self::SESSION_CACHE_KEY, $sessionData, self::SESSION_TIMEOUT);
 
-            // Validate session with real ANAF API call
-            $isValid = $this->validateSession();
-
-            if (! $isValid) {
-                Log::warning('ANAF session validation failed - cookies do not provide valid authentication', [
-                    'cookie_names' => array_keys($cookies),
-                    'source' => $source,
-                ]);
-
-                // Clear the invalid session
-                $this->clearSession();
-
-                return false;
-            }
-
-            // Store expiry time for validated session
+            // Store expiry time
             Cache::put(self::SESSION_CACHE_KEY.':expire_time', now()->addSeconds(self::SESSION_TIMEOUT)->timestamp, self::SESSION_TIMEOUT + 60);
 
-            Log::info('ANAF session cookies imported and validated successfully', [
+            Log::info('ANAF session cookies imported (validation deferred)', [
                 'cookie_count' => count($cookies),
                 'cookie_names' => array_keys($cookies),
                 'source' => $source,
                 'expires_at' => now()->addSeconds(self::SESSION_TIMEOUT)->toDateTimeString(),
-                'validation_status' => 'passed',
+                'validation_status' => 'deferred',
             ]);
 
             return true;
@@ -689,10 +678,11 @@ class AnafSpvService
         // Handle both old and new format
         $cookies = is_array($sessionData) && isset($sessionData['cookies']) ? $sessionData['cookies'] : $sessionData;
         $source = is_array($sessionData) && isset($sessionData['source']) ? $sessionData['source'] : 'unknown';
+        $validated = is_array($sessionData) && isset($sessionData['validated']) ? $sessionData['validated'] : false;
 
         return [
             'active' => $isActive,
-            'validated' => $isActive, // Since we now validate on import, active sessions are validated
+            'validated' => $validated, // Only true after actual validation with ANAF
             'expires_at' => $this->getSessionExpiryTime()?->toDateTimeString(),
             'remaining_seconds' => $remainingSeconds,
             'remaining_minutes' => $remainingSeconds ? round($remainingSeconds / 60, 1) : null,
@@ -700,7 +690,7 @@ class AnafSpvService
             'cookie_names' => $isActive ? array_keys($cookies) : [],
             'source' => $source,
             'imported_at' => is_array($sessionData) && isset($sessionData['imported_at']) ? $sessionData['imported_at'] : null,
-            'authentication_status' => $isActive ? 'authenticated' : 'not_authenticated',
+            'authentication_status' => $isActive ? ($validated ? 'authenticated' : 'pending_validation') : 'not_authenticated',
         ];
     }
 
@@ -751,6 +741,21 @@ class AnafSpvService
             $this->clearSession();
 
             return false;
+        }
+    }
+
+    private function markSessionAsValidated(): void
+    {
+        $sessionData = Cache::get(self::SESSION_CACHE_KEY, []);
+
+        // Only mark as validated if not already validated
+        if (is_array($sessionData) && (! isset($sessionData['validated']) || ! $sessionData['validated'])) {
+            $sessionData['validated'] = true;
+            Cache::put(self::SESSION_CACHE_KEY, $sessionData, self::SESSION_TIMEOUT);
+
+            Log::info('Session marked as validated after successful API call', [
+                'source' => $sessionData['source'] ?? 'unknown',
+            ]);
         }
     }
 }

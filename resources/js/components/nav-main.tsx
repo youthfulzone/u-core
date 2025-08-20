@@ -41,21 +41,22 @@ export function NavMain({ items = [] }: { items: NavItem[] }) {
                                 isActive={isActive && !hasChildren}
                                 tooltip={{ children: item.title }}
                                 onClick={hasChildren ? () => toggleItem(item.title) : undefined}
-                                className={hasChildren ? 'cursor-pointer' : ''}
+                                size="default"
+                                className={hasChildren ? 'cursor-pointer h-8 text-sm' : ''}
                             >
                                 {hasChildren ? (
-                                    <div className="flex w-full items-center">
-                                        {item.icon && <item.icon />}
+                                    <div className="flex w-full items-center gap-2">
+                                        {item.icon && <item.icon className="h-4 w-4 shrink-0" />}
                                         <span className="flex-1">{item.title}</span>
                                         <ChevronRight 
-                                            className={`h-4 w-4 transition-transform duration-200 ${
+                                            className={`h-4 w-4 shrink-0 transition-transform duration-200 ${
                                                 isOpen ? 'rotate-90' : ''
                                             }`} 
                                         />
                                     </div>
                                 ) : (
                                     <Link href={item.href} prefetch>
-                                        {item.icon && <item.icon />}
+                                        {item.icon && <item.icon className="h-4 w-4 shrink-0" />}
                                         <span>{item.title}</span>
                                     </Link>
                                 )}
@@ -67,6 +68,7 @@ export function NavMain({ items = [] }: { items: NavItem[] }) {
                                         <SidebarMenuSubItem key={child.title}>
                                             <SidebarMenuSubButton 
                                                 asChild 
+                                                size="md"
                                                 isActive={
                                                     // Exact matching for SPV submenus
                                                     child.href === '/spv/requests' 
@@ -75,9 +77,10 @@ export function NavMain({ items = [] }: { items: NavItem[] }) {
                                                             ? page.url === '/spv'
                                                             : page.url === child.href || page.url.startsWith(child.href + '/')
                                                 }
+                                                className="h-8 text-sm"
                                             >
                                                 <Link href={child.href} prefetch>
-                                                    {child.icon && <child.icon />}
+                                                    {child.icon && <child.icon className="h-4 w-4 shrink-0" />}
                                                     <span>{child.title}</span>
                                                 </Link>
                                             </SidebarMenuSubButton>

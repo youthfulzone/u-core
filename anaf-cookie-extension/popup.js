@@ -316,7 +316,11 @@ document.addEventListener('DOMContentLoaded', function() {
             'lastClearStatus',
             'lastClearMessage',
             'lastClearError',
-            'clearedCookieCount'
+            'clearedCookieCount',
+            'trigger',
+            'retryCount',
+            'syncDuration',
+            'serverResponse'
         ], function(result) {
             // Determine which operation was most recent
             const lastSyncTime = result.lastSync || 0;
@@ -344,8 +348,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 if (result.lastSyncStatus === 'success') {
                     const cookieInfo = result.cookieCount ? ` (${result.cookieCount} cookies)` : '';
+                    const triggerInfo = result.trigger ? ` via ${result.trigger}` : '';
+                    const retryInfo = result.retryCount > 0 ? ` (${result.retryCount} retries)` : '';
+                    const durationInfo = result.syncDuration ? ` in ${result.syncDuration}ms` : '';
                     const message = result.lastSyncMessage || 'Cookies synced successfully';
-                    showStatus(`✅ ${syncTime}: ${message}${cookieInfo}`, 'success');
+                    showStatus(`✅ ${syncTime}: ${message}${cookieInfo}${triggerInfo}${retryInfo}${durationInfo}`, 'success');
                     errorBtn.style.display = 'none';
                 } else if (result.lastSyncStatus === 'error') {
                     let errorMessage = result.lastError || 'Unknown error';

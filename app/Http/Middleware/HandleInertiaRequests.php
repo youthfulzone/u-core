@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Services\AnafSpvService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
@@ -39,6 +40,27 @@ class HandleInertiaRequests extends Middleware
     {
         [$message, $author] = str(Inspiring::quotes()->random())->explode('-');
 
+        // Get ANAF status globally for header
+        $anafData = [];
+        try {
+            $spvService = app(AnafSpvService::class);
+            $sessionStatus = $spvService->getSessionStatus();
+            $apiCallStatus = $spvService->getApiCallStatus();
+
+            $anafData = [
+                'sessionActive' => $sessionStatus['active'] ?? false,
+                'apiCallStatus' => $apiCallStatus,
+                'authenticationStatusText' => $sessionStatus['authentication_status'] ?? 'not_authenticated',
+            ];
+        } catch (\Exception $e) {
+            // Fallback if service fails
+            $anafData = [
+                'sessionActive' => false,
+                'apiCallStatus' => null,
+                'authenticationStatusText' => 'not_authenticated',
+            ];
+        }
+
         return [
             ...parent::share($request),
             'name' => config('app.name'),
@@ -51,6 +73,7 @@ class HandleInertiaRequests extends Middleware
                 'location' => $request->url(),
             ],
             'sidebarOpen' => ! $request->hasCookie('sidebar_state') || $request->cookie('sidebar_state') === 'true',
+            ...$anafData,
         ];
     }
 }

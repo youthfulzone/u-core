@@ -40,12 +40,17 @@ class SpvRequestsController extends Controller
             ->orderBy('created_at', 'desc')
             ->paginate(20);
 
+        // Get session status for breadcrumb status indicator
+        $sessionStatus = $this->anafSpvService->getSessionStatus();
+
         return Inertia::render('spv/Requests', [
             'requests' => $requests,
             'availableCifs' => $availableCifs,
             'documentTypes' => [
                 'Fisa Rol' => 'Fisa Rol',
             ],
+            'sessionActive' => $sessionStatus['active'],
+            'authenticationStatusText' => $sessionStatus['authentication_status'] ?? 'not_authenticated',
         ]);
     }
 

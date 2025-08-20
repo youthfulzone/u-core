@@ -22,7 +22,12 @@ import {
     RefreshCw, 
     Loader2,
     Trash2,
-    RotateCcw
+    RotateCcw,
+    X,
+    Wifi,
+    WifiOff,
+    Zap,
+    AlertCircle
 } from 'lucide-react'
 
 interface SpvMessage {
@@ -103,15 +108,20 @@ export default function SpvIndex({
     const [showExtensionTest, setShowExtensionTest] = useState(false)
     const [testResults, setTestResults] = useState<any>(null)
     const [currentApiStatus, setCurrentApiStatus] = useState<ApiCallStatus | undefined>(apiCallStatus)
+    const [connectionStatus, setConnectionStatus] = useState<'checking' | 'connected' | 'disconnected'>(
+        sessionActive ? 'connected' : 'disconnected'
+    )
     
     // Pagination state
     const [currentPage, setCurrentPage] = useState(1)
     const messagesPerPage = 10
 
-    // Update API call status when prop changes (after page reload)
+    // Update API call status and connection status when prop changes
     useEffect(() => {
         setCurrentApiStatus(apiCallStatus)
-    }, [apiCallStatus])
+        setConnectionStatus(sessionActive ? 'connected' : 'disconnected')
+    }, [apiCallStatus, sessionActive])
+
 
     // Function to reset API call counter
     const handleResetApiCounter = async () => {
@@ -135,6 +145,57 @@ export default function SpvIndex({
         } catch (error) {
             console.error('Failed to reset API counter:', error)
             setSyncMessage('❌ Eroare la resetarea contorului API')
+        }
+    }
+
+    // Handle connection check/establish
+    const handleConnectionCheck = async () => {
+        try {
+            setConnectionStatus('checking')
+            setSyncMessage('🔍 Se verifică conexiunea ANAF...')
+            
+            // Check session status first
+            const sessionResponse = await fetch('/api/anaf/session/status')
+            const sessionData = await sessionResponse.json()
+            
+            if (sessionData.success && sessionData.session?.active) {
+                setConnectionStatus('connected')
+                setSyncMessage('✅ Conexiune ANAF activă!')
+                setTimeout(() => setSyncMessage(null), 3000)
+                return
+            }
+            
+            // No active session - try extension or open ANAF
+            setConnectionStatus('disconnected')
+            
+            if (window.anafCookieHelper && extensionAvailable) {
+                setSyncMessage('🔌 Se încearcă conectarea prin extensie...')
+                
+                const cookieResult = await window.anafCookieHelper.getCookies()
+                
+                if (cookieResult.success && Object.keys(cookieResult.cookies).length > 0) {
+                    const syncResult = await window.anafCookieHelper.syncCookies()
+                    
+                    if (syncResult.success) {
+                        setConnectionStatus('connected')
+                        setSyncMessage('✅ Conectat prin extensie!')
+                        setTimeout(() => setSyncMessage(null), 3000)
+                        return
+                    }
+                }
+            }
+            
+            // Open ANAF for authentication
+            setSyncMessage('🔐 Se deschide ANAF pentru autentificare...')
+            window.open('https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile=60', '_blank')
+            
+            setTimeout(() => setSyncMessage(null), 3000)
+            
+        } catch (error) {
+            console.error('Connection check failed:', error)
+            setConnectionStatus('disconnected')
+            setSyncMessage('❌ Verificarea conexiunii a eșuat: ' + (error instanceof Error ? error.message : 'Eroare necunoscută'))
+            setTimeout(() => setSyncMessage(null), 8000)
         }
     }
 
@@ -334,16 +395,103 @@ export default function SpvIndex({
         }
     }
 
-    const handleSyncMessages = async () => {
-        console.log('Sync button clicked!')
+    const handleSyncMessages = async (e?: React.MouseEvent) => {
+        console.log('🚨 SYNC BUTTON CLICKED - WITH COOKIE SYNC CHECK', {
+            event: e,
+            eventType: e?.type,
+            eventTarget: e?.target,
+            sessionActive,
+            connectionStatus
+        })
+        
+        // CRITICAL: Prevent any default behavior (FIXED - removed stopImmediatePropagation)
+        if (e) {
+            console.log('🛑 Calling preventDefault() and stopPropagation() - FIXED VERSION')
+            e.preventDefault()
+            e.stopPropagation()
+            console.log('✅ preventDefault() and stopPropagation() called successfully - NO ERRORS')
+        }
+        
+        // FIRST: Try Python cookie scraper, if it fails, use browser-based extraction
+        console.log('🐍 Running Python cookie scraper (scrap.py)...')
+        setSyncMessage('🔄 Se extrag cookie-urile din browser...')
+        
+        let scraperSuccess = false
         
         try {
-            setLoading(true)
-            setSyncMessage('🔄 Se verifică sesiunea ANAF activă...')
+            const scraperResponse = await fetch('/api/anaf/run-cookie-scraper', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+                }
+            })
             
-            // Step 1: Always try backend sync first (extension may have auto-synced cookies)
-            console.log('📡 Trying backend sync with existing session...')
+            const scraperResult = await scraperResponse.json()
+            console.log('🐍 Python scraper result:', scraperResult)
             
+            if (scraperResult.success) {
+                console.log('✅ Cookie scraping successful!')
+                setSyncMessage('✅ Cookie-uri extrase cu succes!')
+                scraperSuccess = true
+            } else {
+                console.warn('⚠️ Python scraper failed, trying browser method:', scraperResult)
+                
+                // If Chrome is running or no cookies found, use browser-based extraction
+                if (scraperResult.output && (scraperResult.output.includes('database locked') || scraperResult.output.includes('No ANAF cookies found'))) {
+                    console.log('🌐 Switching to browser-based cookie extraction...')
+                    setSyncMessage('🌐 Se deschide ANAF pentru extragerea cookie-urilor...')
+                    
+                    // Open ANAF cookie helper
+                    const helperWindow = window.open(
+                        '/anaf/cookie-helper', 
+                        '_blank',
+                        'width=800,height=700,scrollbars=yes'
+                    )
+                    
+                    if (helperWindow) {
+                        setSyncMessage('🔐 Urmați instrucțiunile din fereastra deschisă pentru autentificare')
+                        setTimeout(() => setSyncMessage(null), 8000)
+                        setLoading(false)
+                        return
+                    } else {
+                        setSyncMessage('❌ Nu s-a putut deschide helper-ul. Verificați popup blocker.')
+                        setTimeout(() => setSyncMessage(null), 5000)
+                        setLoading(false)
+                        return
+                    }
+                } else {
+                    setSyncMessage('⚠️ Extragerea cookie-urilor a eșuat, se continuă...')
+                }
+            }
+        } catch (scraperError) {
+            console.warn('⚠️ Cookie scraper request failed:', scraperError)
+            setSyncMessage('⚠️ Eroare la extragerea cookie-urilor, se continuă...')
+        }
+        
+        // Small delay to let user see the scraping message
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        
+        console.log('🔄 Starting background AJAX sync process...')
+        
+        // Check if connection is active before attempting sync
+        const isConnected = sessionActive || connectionStatus === 'connected'
+        console.log('🔗 Connection check:', { isConnected, sessionActive, connectionStatus })
+        
+        if (!isConnected) {
+            console.log('❌ No connection - aborting sync')
+            setSyncMessage('❌ Nu există conexiune activă cu ANAF. Apăsați mai întâi "Conectează ANAF".')
+            setTimeout(() => setSyncMessage(null), 5000)
+            return
+        }
+        
+        setLoading(true)
+        setSyncMessage('🔄 Se sincronizează mesajele în fundal...')
+        console.log('📡 Making AJAX request to /spv/sync-messages...')
+        
+        try {
+            // Make pure background AJAX request - ABSOLUTELY NO NAVIGATION
             const response = await fetch('/spv/sync-messages', {
                 method: 'POST',
                 headers: {
@@ -356,81 +504,99 @@ export default function SpvIndex({
                 })
             })
             
+            console.log('📡 AJAX response received:', {
+                status: response.status,
+                statusText: response.statusText,
+                ok: response.ok,
+                headers: Object.fromEntries(response.headers.entries())
+            })
+            
             const result = await response.json()
+            console.log('📊 Parsed response data:', result)
             
             if (response.ok && result.success) {
-                setSyncMessage(`✅ Succes! ${result.synced_count} mesaje noi sincronizate (${result.total_messages} mesaje găsite în total)`)
-                setTimeout(() => setSyncMessage(null), 5000)
+                console.log('✅ SUCCESS: Sync completed via AJAX!')
+                setSyncMessage(`✅ ${result.message || 'Mesaje sincronizate cu succes!'} (${result.synced_count || 0} noi)`)
+                
+                // Refresh the page data to show new messages
+                console.log('🔄 Refreshing page data to show new messages...')
                 router.reload({ only: ['messages', 'requests', 'apiCallStatus'] })
-                return
-            }
-            
-            // Step 2: If backend sync failed and extension is available, try extension cookie sync
-            if (window.anafCookieHelper && extensionAvailable) {
-                console.log('🔌 Backend sync failed, trying extension cookie sync...')
-                setSyncMessage('🔌 Extensie detectată! Se preiau cookie-urile ANAF...')
                 
-                const cookieResult = await window.anafCookieHelper.getCookies()
-                
-                if (cookieResult.success && Object.keys(cookieResult.cookies).length > 0) {
-                    console.log('✅ Extension: Found ANAF cookies, syncing to backend...')
-                    setSyncMessage('✅ Cookie-uri găsite! Se sincronizează cu backend-ul...')
-                    
-                    // Sync cookies using extension
-                    const syncResult = await window.anafCookieHelper.syncCookies()
-                    
-                    if (syncResult.success) {
-                        setSyncMessage('✅ Cookie-uri sincronizate! Se reîncearcă sincronizarea mesajelor...')
-                        
-                        // Retry backend sync with fresh cookies
-                        const retryResponse = await fetch('/spv/sync-messages', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Accept': 'application/json',
-                                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
-                            },
-                            body: JSON.stringify({
-                                days: 60
-                            })
-                        })
-                        
-                        const retryResult = await retryResponse.json()
-                        
-                        if (retryResponse.ok && retryResult.success) {
-                            setSyncMessage(`✅ Succes! ${retryResult.synced_count} mesaje noi sincronizate (${retryResult.total_messages} mesaje găsite în total)`)
-                            setTimeout(() => setSyncMessage(null), 5000)
-                            router.reload({ only: ['messages', 'requests', 'apiCallStatus'] })
-                            return
-                        }
-                    }
-                }
-                
-                setSyncMessage('🔐 Cookie-urile extensiei au expirat sau sunt invalide. Se deschide ANAF pentru autentificare...')
             } else {
-                setSyncMessage('🔐 Autentificare necesară. Se deschide ANAF pentru autentificare...')
+                // Sync failed, try extension fallback
+                console.log('❌ Background sync failed, trying extension...')
+                setConnectionStatus('disconnected')
+                
+                if (window.anafCookieHelper && extensionAvailable) {
+                    await handleExtensionFallback()
+                } else {
+                    setSyncMessage('🔐 Autentificare necesară. Se deschide ANAF...')
+                    window.open('https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile=60', '_blank')
+                    setTimeout(() => setSyncMessage(null), 3000)
+                }
             }
-            
-            // Open ANAF for authentication - extension will auto-capture cookies
-            window.open('https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile=60', '_blank')
-            
-            setSyncMessage(`🔐 Vă rugăm să vă autentificați la ANAF în tab-ul nou.
-
-${window.anafCookieHelper ? 'Extensia va face automat:' : 'După autentificare:'}
-1. ${window.anafCookieHelper ? 'Capturarea cookie-urilor de autentificare' : 'Folosiți extensia pentru a captura cookie-urile'}
-2. ${window.anafCookieHelper ? 'Sincronizarea lor cu această aplicație' : 'Sau importați manual datele de sesiune'}
-3. ${window.anafCookieHelper ? 'Activarea preluării automate a mesajelor' : 'Apoi sincronizați mesajele'}
-
-După autentificare, apăsați din nou "Sincronizare mesaje ANAF".`)
-            
-            setTimeout(() => setSyncMessage(null), 15000)
             
         } catch (error) {
-            console.error('Sync failed:', error)
-            setSyncMessage('❌ Sincronizarea a eșuat: ' + (error instanceof Error ? error.message : 'Eroare necunoscută'))
-            setTimeout(() => setSyncMessage(null), 8000)
+            console.error('❌ Background sync AJAX error:', error)
+            setSyncMessage('❌ Eroare la sincronizare: ' + (error instanceof Error ? error.message : 'necunoscută'))
         } finally {
             setLoading(false)
+            setTimeout(() => setSyncMessage(null), 8000)
+            console.log('🏁 Sync process completed - function exiting without navigation')
+        }
+    }
+
+    // Extension fallback function - separate for clarity
+    const handleExtensionFallback = async () => {
+        try {
+            setSyncMessage('🔌 Încercare prin extensie...')
+            
+            const cookieResult = await window.anafCookieHelper.getCookies()
+            
+            if (cookieResult.success && Object.keys(cookieResult.cookies).length > 0) {
+                setSyncMessage('✅ Cookie-uri găsite! Se sincronizează...')
+                
+                const syncResult = await window.anafCookieHelper.syncCookies()
+                
+                if (syncResult.success) {
+                    // Retry with background AJAX after cookie sync
+                    const retryResponse = await fetch('/spv/sync-messages', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+                        },
+                        body: JSON.stringify({
+                            days: 60
+                        })
+                    })
+                    
+                    const retryResult = await retryResponse.json()
+                    
+                    if (retryResponse.ok && retryResult.success) {
+                        setSyncMessage(`✅ Sincronizare reușită prin extensie! (${retryResult.synced_count || 0} noi)`)
+                        
+                        // Refresh the page data to show new messages
+                        console.log('🔄 Refreshing page data after extension sync...')
+                        router.reload({ only: ['messages', 'requests', 'apiCallStatus'] })
+                        
+                        setTimeout(() => setSyncMessage(null), 5000)
+                        return
+                    }
+                }
+            }
+            
+            // Extension failed, open ANAF
+            setSyncMessage('🔐 Se deschide ANAF pentru autentificare...')
+            window.open('https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile=60', '_blank')
+            setTimeout(() => setSyncMessage(null), 3000)
+            
+        } catch (error) {
+            console.error('Extension fallback failed:', error)
+            setSyncMessage('🔐 Se deschide ANAF pentru autentificare...')
+            window.open('https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile=60', '_blank')
+            setTimeout(() => setSyncMessage(null), 3000)
         }
     }
 
@@ -654,87 +820,71 @@ După autentificare, apăsați din nou "Sincronizare mesaje ANAF".`)
             <Head title="SPV - Spațiul Privat Virtual ANAF" />
             
             <div className="flex h-full flex-1 flex-col gap-4 rounded-xl p-4 overflow-x-auto">
-                {/* Bara de status sincronizare ANAF */}
-                <div className="flex items-center justify-between p-4 rounded-lg border bg-card">
-                    <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-2">
-                            <div className={`w-2 h-2 rounded-full ${sessionActive ? 'bg-green-500' : 'bg-red-500'}`} />
-                            <span className="text-sm font-medium">
-                                {sessionActive ? 'Conectat la ANAF' : 'Deconectat de la ANAF'}
-                            </span>
-                        </div>
-                        {extensionLastSync && (
-                            <span className="text-xs text-muted-foreground">
-                                Ultima sincronizare: {new Date(extensionLastSync).toLocaleString('ro-RO')}
-                            </span>
-                        )}
-                    </div>
-                    
-                    <div className="flex items-center gap-3">
-                        <Button
-                            onClick={handleSyncMessages}
-                            disabled={loading}
-                            size="default"
-                            className={`relative ${sessionActive ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}
-                        >
-                            {loading ? (
-                                <>
-                                    <Icon iconNode={Loader2} className="mr-2 h-4 w-4 animate-spin" />
-                                    Se sincronizează...
-                                </>
-                            ) : (
-                                <div className="flex items-center gap-2">
-                                    <Icon iconNode={RefreshCw} className="h-4 w-4" />
-                                    <span>Sincronizare mesaje ANAF</span>
-                                    {currentApiStatus && (
-                                        <Badge 
-                                            variant="secondary" 
-                                            className={`ml-2 text-xs ${
-                                                currentApiStatus.calls_remaining > 20 
-                                                    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
-                                                    : currentApiStatus.calls_remaining > 5 
-                                                    ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200' 
-                                                    : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
-                                            }`}
-                                        >
-                                            {currentApiStatus.calls_remaining}/{currentApiStatus.calls_limit}
-                                        </Badge>
-                                    )}
-                                </div>
-                            )}
-                        </Button>
-                        
-                        {/* Buton resetare contor API - afișează când apeluri > 80 sau utilizatorul are erori */}
-                        {currentApiStatus && (currentApiStatus.calls_made > 80 || currentApiStatus.recent_errors.length > 0) && (
-                            <Button 
-                                onClick={handleResetApiCounter}
-                                disabled={loading}
-                                size="default"
-                                variant="outline"
-                                className="border-yellow-200 text-yellow-600 hover:bg-yellow-50 hover:text-yellow-700"
-                                title={`Resetare contor API (${currentApiStatus.calls_made}/${currentApiStatus.calls_limit} folosite)`}
-                            >
-                                <Icon iconNode={RotateCcw} className="h-4 w-4" />
-                            </Button>
-                        )}
-                    </div>
-                </div>
-
                 {/* Main Content Area */}
                 <div className="relative min-h-[60vh] flex-1 overflow-hidden rounded-xl border border-sidebar-border/70 md:min-h-min dark:border-sidebar-border p-6">
-                    {/* Lista mesaje ANAF */}
+                    {/* Connection Status and Controls */}
                     <div className="mb-6">
-                        <h2 className="text-lg font-semibold mb-2">
-                            Mesaje ANAF ({filteredMessages.length}{messages.length !== filteredMessages.length ? ` din ${messages.length}` : ''})
-                            {totalPages > 1 && (
-                                <span className="text-sm font-normal text-muted-foreground ml-2">
-                                    - Pagina {currentPage} din {totalPages}
-                                </span>
-                            )}
-                        </h2>
-                        <p className="text-sm text-muted-foreground mb-4">
-                            Ultimele mesaje din Spațiul Privat Virtual ANAF
-                        </p>
+                        <div className="flex items-center justify-between mb-4">
+                            <h2 className="text-lg font-semibold">
+                                Mesaje ANAF ({filteredMessages.length}{messages.length !== filteredMessages.length ? ` din ${messages.length}` : ''})
+                                {totalPages > 1 && (
+                                    <span className="text-sm font-normal text-muted-foreground ml-2">
+                                        - Pagina {currentPage} din {totalPages}
+                                    </span>
+                                )}
+                            </h2>
+                            
+                            {/* Control Area */}
+                            <div className="flex items-center gap-3">                                
+                                {/* Sync Messages Button - FIXED! */}
+                                <Button
+                                    type="button"
+                                    onClick={handleSyncMessages}
+                                    disabled={loading || (!sessionActive && connectionStatus !== 'connected')}
+                                    size="default"
+                                    className={`transition-colors duration-200 w-[200px] h-10 ${
+                                        (!sessionActive && connectionStatus !== 'connected') ? 'opacity-50 cursor-not-allowed' : ''
+                                    }`}
+                                >
+                                    <div className="flex items-center justify-center gap-2 w-full h-full">
+                                        <Icon 
+                                            iconNode={RefreshCw} 
+                                            className={`h-4 w-4 flex-shrink-0 ${loading ? 'animate-spin' : ''}`} 
+                                        />
+                                        <span className="text-sm font-medium truncate">
+                                            {loading ? 'Se sincronizează...' : 'Sincronizare mesaje'}
+                                        </span>
+                                        {!loading && (!sessionActive && connectionStatus !== 'connected') && (
+                                            <Icon iconNode={AlertCircle} className="h-3 w-3 text-orange-500 flex-shrink-0" />
+                                        )}
+                                    </div>
+                                </Button>
+                            </div>
+                        </div>
+                        
+                        {/* Connection Status Alert */}
+                        {(!sessionActive && connectionStatus === 'disconnected') && (
+                            <Alert className="mb-4 border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-950">
+                                <AlertCircle className="h-4 w-4 text-orange-600" />
+                                <AlertDescription className="text-orange-700 dark:text-orange-300">
+                                    Nu există o conexiune activă cu ANAF. Apăsați "Conectează ANAF" pentru a vă autentifica și a activa sincronizarea mesajelor.
+                                </AlertDescription>
+                            </Alert>
+                        )}
+                        
+                        {/* Cookie Extraction Help */}
+                        {!sessionActive && (
+                            <Alert className="mb-4 border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950">
+                                <Icon iconNode={RefreshCw} className="h-4 w-4 text-blue-600" />
+                                <AlertDescription className="text-blue-700 dark:text-blue-300">
+                                    <strong>Pentru sincronizare automată:</strong><br />
+                                    1. Autentificați-vă la ANAF într-un browser<br />
+                                    2. Închideți browserul complet<br />
+                                    3. Apăsați "Sincronizare mesaje" - sistemul va extrage automat cookie-urile
+                                </AlertDescription>
+                            </Alert>
+                        )}
+                        
                     </div>
                     
                     <>

@@ -12,7 +12,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('dashboard', function () {
         return Inertia::render('dashboard');
     })->name('dashboard');
-    
+
     Route::get('spv-test', function () {
         return Inertia::render('spv/Index', [
             'messages' => [],
@@ -31,27 +31,41 @@ Route::middleware(['auth', 'verified'])->group(function () {
 Route::prefix('api/anaf')->group(function () {
     Route::post('/session/import', [AnafBrowserSessionController::class, 'importSession'])
         ->name('anaf.session.import');
-    
+
     Route::get('/session/status', [AnafBrowserSessionController::class, 'sessionStatus'])
         ->name('anaf.session.status');
-    
+
     Route::delete('/session', [AnafBrowserSessionController::class, 'clearSession'])
         ->name('anaf.session.clear');
-    
+
     Route::post('/session/refresh', [AnafBrowserSessionController::class, 'refreshSession'])
         ->name('anaf.session.refresh');
-    
+
     Route::post('/session/capture', [AnafBrowserSessionController::class, 'captureFromResponse'])
         ->name('anaf.session.capture');
-    
-    
+
     Route::get('/simple-fetch', [AnafBrowserSessionController::class, 'simpleFetch'])
         ->name('anaf.simple.fetch');
-    
+
     Route::get('/proxy/{endpoint}', [AnafBrowserSessionController::class, 'proxyRequest'])
         ->name('anaf.proxy')
         ->where('endpoint', 'listaMesaje|descarcare');
+
+    // Global cookie management routes
+    Route::get('/global-cookies', [AnafBrowserSessionController::class, 'getGlobalAnafCookies'])
+        ->name('anaf.global.get');
+
+    Route::post('/global-cookies/use', [AnafBrowserSessionController::class, 'useGlobalCookies'])
+        ->name('anaf.global.use');
+
+    Route::post('/run-cookie-scraper', [AnafBrowserSessionController::class, 'runCookieScraper'])
+        ->name('anaf.cookie.scraper');
 });
+
+// ANAF Cookie Helper (accessible without auth for browser window)
+Route::get('/anaf/cookie-helper', function () {
+    return view('anaf-cookie-helper');
+})->name('anaf.cookie.helper');
 
 // Extension API endpoint (needs to be outside middleware)
 Route::post('/api/anaf/extension-cookies', [AnafBrowserSessionController::class, 'receiveExtensionCookies'])

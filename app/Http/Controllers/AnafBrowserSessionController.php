@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Services\AnafSpvService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class AnafBrowserSessionController extends Controller
@@ -308,44 +309,72 @@ class AnafBrowserSessionController extends Controller
     }
 
     /**
-     * Receive cookies from browser extension
+     * Receive cookies from browser extension (Enhanced version)
      */
     public function receiveExtensionCookies(Request $request)
     {
         try {
-            $request->validate([
-                'cookies' => 'required|string',
+            // Enhanced validation for improved extension
+            $validation = $request->validate([
+                'cookies' => 'required',
                 'source' => 'required|string',
+                'timestamp' => 'sometimes|integer',
+                'browser_info' => 'sometimes|array',
+                'metadata' => 'sometimes|array',
+                'trigger' => 'sometimes|string',
+                'cookie_count' => 'sometimes|integer',
+                'user_agent' => 'sometimes|string',
+                'extension_version' => 'sometimes|string',
             ]);
 
-            $cookieString = $request->input('cookies');
+            $cookiesInput = $request->input('cookies');
             $source = $request->input('source');
+            $browserInfo = $request->input('browser_info', []);
+            $metadata = $request->input('metadata', []);
+            $trigger = $request->input('trigger', 'unknown');
+            $extensionVersion = $request->input('extension_version');
+            $userAgent = $request->input('user_agent');
 
-            Log::info('Received cookies from extension', [
+            // Parse cookies based on format
+            $cookies = [];
+
+            if (is_string($cookiesInput)) {
+                // String format from browser extension
+                $cookiePairs = explode('; ', $cookiesInput);
+                foreach ($cookiePairs as $pair) {
+                    if (strpos($pair, '=') !== false) {
+                        [$name, $value] = explode('=', $pair, 2);
+                        $cookies[trim($name)] = trim($value);
+                    }
+                }
+            } elseif (is_array($cookiesInput)) {
+                // Object format from Python scraper
+                $cookies = $cookiesInput;
+            } else {
+                throw new \InvalidArgumentException('Invalid cookies format');
+            }
+
+            Log::info('Enhanced cookie reception from external source', [
                 'source' => $source,
-                'cookie_length' => strlen($cookieString),
-                'timestamp' => $request->input('timestamp'),
+                'trigger' => $trigger,
+                'cookie_count' => count($cookies),
+                'cookie_names' => array_keys($cookies),
+                'extension_version' => $extensionVersion,
+                'user_agent' => $userAgent ? substr($userAgent, 0, 100) : null,
+                'browser_info' => $browserInfo,
+                'has_metadata' => ! empty($metadata),
+                'request_headers' => [
+                    'x-extension-version' => $request->header('X-Extension-Version'),
+                    'x-sync-trigger' => $request->header('X-Sync-Trigger'),
+                ],
             ]);
 
-            // Parse cookie string into array
-            $cookies = [];
-            $cookiePairs = explode('; ', $cookieString);
-
-            foreach ($cookiePairs as $pair) {
-                if (strpos($pair, '=') !== false) {
-                    [$name, $value] = explode('=', $pair, 2);
-                    $cookies[trim($name)] = trim($value);
-                }
+            // Store cookies globally for all users if from Python scraper
+            if ($source === 'python_scraper') {
+                $this->storeGlobalAnafCookies($cookies, $browserInfo, $metadata);
             }
 
-            if (empty($cookies)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'No valid cookies found',
-                ], 400);
-            }
-
-            // Import and validate the session cookies
+            // Import cookies using the SPV service (validates against ANAF)
             $imported = $this->spvService->importSessionCookies($cookies, $source);
 
             if (! $imported) {
@@ -354,32 +383,212 @@ class AnafBrowserSessionController extends Controller
                     'message' => 'Session cookies validation failed - no valid ANAF authentication found',
                     'error_type' => 'authentication_failed',
                     'recommendation' => 'Please authenticate with ANAF in your browser first',
+                    'cookie_count' => count($cookies),
                 ], 400);
             }
-
-            Log::info('Extension cookies successfully imported and validated', [
-                'source' => $source,
-                'cookie_count' => count($cookies),
-                'validation_status' => 'passed',
-            ]);
 
             return response()->json([
                 'success' => true,
                 'message' => 'ANAF session cookies imported and validated successfully',
                 'cookie_count' => count($cookies),
                 'source' => $source,
+                'trigger' => $trigger,
+                'extension_version' => $extensionVersion,
+                'stored_globally' => $source === 'python_scraper',
                 'session_status' => $this->spvService->getSessionStatus(),
+                'processing_time_ms' => round((microtime(true) - ($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true))) * 1000, 2),
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Failed to process extension cookies', [
+            Log::error('Extension/scraper cookie import failed', [
                 'error' => $e->getMessage(),
                 'source' => $request->input('source', 'unknown'),
+                'trace' => $e->getTraceAsString(),
             ]);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to process extension cookies: '.$e->getMessage(),
+                'message' => 'Cookie import failed: '.$e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Store ANAF cookies globally for all users to access
+     */
+    private function storeGlobalAnafCookies(array $cookies, array $browserInfo = [], array $metadata = []): void
+    {
+        try {
+            // Store in cache with a longer TTL since these are scraped cookies
+            $cacheKey = 'global_anaf_cookies';
+            $cookieData = [
+                'cookies' => $cookies,
+                'browser_info' => $browserInfo,
+                'metadata' => $metadata,
+                'scraped_at' => now()->toISOString(),
+                'expires_at' => now()->addHours(6)->toISOString(), // 6 hour expiry
+            ];
+
+            Cache::put($cacheKey, $cookieData, now()->addHours(6));
+
+            // Also store in database for persistence
+            DB::table('anaf_global_sessions')->updateOrInsert(
+                ['id' => 1], // Single global session
+                [
+                    'cookies' => json_encode($cookies),
+                    'browser_info' => json_encode($browserInfo),
+                    'metadata' => json_encode($metadata),
+                    'scraped_at' => now(),
+                    'expires_at' => now()->addHours(6),
+                    'updated_at' => now(),
+                ]
+            );
+
+            Log::info('Global ANAF cookies stored successfully', [
+                'cookie_count' => count($cookies),
+                'cache_key' => $cacheKey,
+                'expires_at' => now()->addHours(6)->toISOString(),
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to store global ANAF cookies', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Get globally stored ANAF cookies for any user
+     */
+    public function getGlobalAnafCookies()
+    {
+        try {
+            // Try cache first
+            $globalCookies = Cache::get('global_anaf_cookies');
+
+            if (! $globalCookies) {
+                // Fallback to database
+                $dbRecord = DB::table('anaf_global_sessions')->where('id', 1)->first();
+                if ($dbRecord && $dbRecord->expires_at > now()) {
+                    $globalCookies = [
+                        'cookies' => json_decode($dbRecord->cookies, true),
+                        'browser_info' => json_decode($dbRecord->browser_info, true),
+                        'metadata' => json_decode($dbRecord->metadata, true),
+                        'scraped_at' => $dbRecord->scraped_at,
+                        'expires_at' => $dbRecord->expires_at,
+                    ];
+
+                    // Restore to cache
+                    Cache::put('global_anaf_cookies', $globalCookies, now()->parse($dbRecord->expires_at));
+                }
+            }
+
+            if ($globalCookies && strtotime($globalCookies['expires_at']) > time()) {
+                return response()->json([
+                    'success' => true,
+                    'has_global_cookies' => true,
+                    'cookie_count' => count($globalCookies['cookies']),
+                    'scraped_at' => $globalCookies['scraped_at'],
+                    'expires_at' => $globalCookies['expires_at'],
+                    'browser_info' => $globalCookies['browser_info'],
+                ]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'has_global_cookies' => false,
+                'message' => 'No valid global ANAF cookies available',
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to retrieve global ANAF cookies', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to retrieve global cookies',
+            ], 500);
+        }
+    }
+
+    /**
+     * Use global cookies for current user session
+     */
+    public function useGlobalCookies()
+    {
+        try {
+            $globalCookies = Cache::get('global_anaf_cookies');
+
+            if (! $globalCookies) {
+                // Try database fallback
+                $dbRecord = DB::table('anaf_global_sessions')->where('id', 1)->first();
+                if ($dbRecord && $dbRecord->expires_at > now()) {
+                    $cookies = json_decode($dbRecord->cookies, true);
+                } else {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'No global ANAF cookies available',
+                    ], 404);
+                }
+            } else {
+                $cookies = $globalCookies['cookies'];
+            }
+
+            // Import global cookies for current user
+            $imported = $this->spvService->importSessionCookies($cookies, 'global_scraper');
+
+            if ($imported) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Global ANAF cookies imported successfully',
+                    'cookie_count' => count($cookies),
+                    'session_status' => $this->spvService->getSessionStatus(),
+                ]);
+            } else {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Global cookies validation failed',
+                ], 400);
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Failed to use global ANAF cookies', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to use global cookies: '.$e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function runCookieScraper(): \Illuminate\Http\JsonResponse
+    {
+        try {
+            // Run the Python cookie scraper via Artisan command
+            $result = \Illuminate\Support\Facades\Artisan::call('anaf:scrap-cookies');
+            $output = \Illuminate\Support\Facades\Artisan::output();
+
+            return response()->json([
+                'success' => $result === 0,
+                'message' => $result === 0 ? 'Cookie scraping completed successfully' : 'Cookie scraping failed',
+                'output' => $output,
+                'exit_code' => $result,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Cookie scraper failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Cookie scraper execution failed: '.$e->getMessage(),
+                'output' => '',
+                'exit_code' => 1,
             ], 500);
         }
     }
