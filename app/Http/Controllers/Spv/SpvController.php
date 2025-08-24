@@ -7,6 +7,7 @@ use App\Http\Requests\Spv\DocumentRequestRequest;
 use App\Http\Requests\Spv\MessagesListRequest;
 use App\Models\Spv\SpvMessage;
 use App\Models\Spv\SpvRequest;
+use App\Services\AnafCompanyService;
 use App\Services\AnafSpvService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -20,7 +21,8 @@ use Inertia\Inertia;
 class SpvController extends Controller
 {
     public function __construct(
-        private AnafSpvService $spvService
+        private AnafSpvService $spvService,
+        private AnafCompanyService $companyService
     ) {}
 
     public function index()
@@ -133,7 +135,17 @@ class SpvController extends Controller
                 }
             }
 
+            // Extract and queue CUIs for company lookup
+            $queuedCompanies = 0;
+            if (! empty($response['cui'])) {
+                $cuis = is_string($response['cui']) ? explode(',', $response['cui']) : (array) $response['cui'];
+                $queuedCompanies = $this->companyService->queueCuisFromMessage($cuis);
+            }
+
             $message = "Synchronized {$syncedCount} new messages.";
+            if ($queuedCompanies > 0) {
+                $message .= " {$queuedCompanies} new companies queued for processing.";
+            }
 
             if ($request->wantsJson()) {
                 return response()->json([
@@ -141,6 +153,7 @@ class SpvController extends Controller
                     'message' => $message,
                     'synced_count' => $syncedCount,
                     'total_messages' => count($response['mesaje']),
+                    'queued_companies' => $queuedCompanies,
                 ]);
             }
 

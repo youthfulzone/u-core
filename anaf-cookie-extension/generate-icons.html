@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Generate ANAF Extension Icons</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            padding: 20px; 
+            background: #f5f5f5;
+        }
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background: white; 
+            padding: 30px; 
+            border-radius: 10px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .icon-row { 
+            display: flex; 
+            align-items: center; 
+            margin: 20px 0; 
+            padding: 15px; 
+            background: #f8f9fa; 
+            border-radius: 8px;
+        }
+        canvas { 
+            margin: 0 10px; 
+            border: 2px solid #ddd; 
+            border-radius: 4px;
+            background: white;
+        }
+        .download-btn { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            background: #007bff; 
+            color: white; 
+            border: none; 
+            border-radius: 4px;
+            cursor: pointer; 
+            font-size: 12px;
+        }
+        .download-btn:hover { background: #0056b3; }
+        .color-info {
+            margin-left: 15px;
+            font-weight: bold;
+        }
+        .blue { color: #2563eb; }
+        .grey { color: #6b7280; }
+        h1 { color: #333; text-align: center; }
+        h2 { color: #555; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .instructions {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 ANAF Extension Icon Generator</h1>
+        
+        <div class="instructions">
+            <strong>Instructions:</strong>
+            <ol>
+                <li>Icons will generate automatically when the page loads</li>
+                <li>Click download buttons to save each icon</li>
+                <li>Replace the existing PNG files in your extension folder</li>
+                <li>Reload the extension in Chrome to see the new icons</li>
+            </ol>
+        </div>
+        
+        <h2>🔵 Blue Icons (Active State - u-core.test open)</h2>
+        <div class="icon-row">
+            <canvas id="blue16" width="16" height="16"></canvas>
+            <canvas id="blue48" width="48" height="48"></canvas>
+            <canvas id="blue128" width="128" height="128"></canvas>
+            <div class="color-info blue">Blue (#2563eb)</div>
+            <div>
+                <button class="download-btn" onclick="downloadIcon('blue16', 'icon16-blue.png')">Download 16px</button>
+                <button class="download-btn" onclick="downloadIcon('blue48', 'icon48-blue.png')">Download 48px</button>
+                <button class="download-btn" onclick="downloadIcon('blue128', 'icon128-blue.png')">Download 128px</button>
+            </div>
+        </div>
+        
+        <h2>⚫ Grey Icons (Inactive State - u-core.test required)</h2>
+        <div class="icon-row">
+            <canvas id="grey16" width="16" height="16"></canvas>
+            <canvas id="grey48" width="48" height="48"></canvas>
+            <canvas id="grey128" width="128" height="128"></canvas>
+            <div class="color-info grey">Grey (#6b7280)</div>
+            <div>
+                <button class="download-btn" onclick="downloadIcon('grey16', 'icon16-grey.png')">Download 16px</button>
+                <button class="download-btn" onclick="downloadIcon('grey48', 'icon48-grey.png')">Download 48px</button>
+                <button class="download-btn" onclick="downloadIcon('grey128', 'icon128-grey.png')">Download 128px</button>
+            </div>
+        </div>
+        
+        <div class="instructions">
+            <strong>Note:</strong> The icons show a clear visual difference - blue icons have a bright blue color (#2563eb) while grey icons use a muted grey color (#6b7280). This makes it easy to see when the extension is active or inactive.
+        </div>
+    </div>
+
+    <script>
+        // Simple but effective icon design that's clearly different between blue and grey
+        function drawIcon(canvas, color, size) {
+            const ctx = canvas.getContext('2d');
+            const center = size / 2;
+            const radius = size * 0.35;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, size, size);
+            
+            // Background circle
+            ctx.fillStyle = color;
+            ctx.globalAlpha = 0.2;
+            ctx.beginPath();
+            ctx.arc(center, center, radius + 5, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // Main circle (cookie outline)
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = Math.max(1, size / 32);
+            ctx.beginPath();
+            ctx.arc(center, center, radius, 0, 2 * Math.PI);
+            ctx.stroke();
+            
+            // Cookie "chips" - small dots
+            ctx.fillStyle = color;
+            const dotSize = Math.max(1, size / 24);
+            
+            // Dots in cookie
+            ctx.beginPath();
+            ctx.arc(center - radius * 0.3, center - radius * 0.3, dotSize, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            ctx.beginPath();
+            ctx.arc(center + radius * 0.3, center - radius * 0.2, dotSize * 0.8, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            ctx.beginPath();
+            ctx.arc(center - radius * 0.2, center + radius * 0.3, dotSize * 0.6, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            ctx.beginPath();
+            ctx.arc(center + radius * 0.2, center + radius * 0.2, dotSize * 0.8, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // Sync arrows around the cookie
+            const arrowSize = size / 8;
+            ctx.fillStyle = color;
+            
+            // Top arrow
+            ctx.beginPath();
+            ctx.moveTo(center - arrowSize/2, center - radius - arrowSize);
+            ctx.lineTo(center, center - radius - arrowSize * 1.5);
+            ctx.lineTo(center + arrowSize/2, center - radius - arrowSize);
+            ctx.lineTo(center + arrowSize/4, center - radius - arrowSize);
+            ctx.lineTo(center + arrowSize/4, center - radius - arrowSize/2);
+            ctx.lineTo(center - arrowSize/4, center - radius - arrowSize/2);
+            ctx.lineTo(center - arrowSize/4, center - radius - arrowSize);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Bottom arrow
+            ctx.beginPath();
+            ctx.moveTo(center + arrowSize/2, center + radius + arrowSize);
+            ctx.lineTo(center, center + radius + arrowSize * 1.5);
+            ctx.lineTo(center - arrowSize/2, center + radius + arrowSize);
+            ctx.lineTo(center - arrowSize/4, center + radius + arrowSize);
+            ctx.lineTo(center - arrowSize/4, center + radius + arrowSize/2);
+            ctx.lineTo(center + arrowSize/4, center + radius + arrowSize/2);
+            ctx.lineTo(center + arrowSize/4, center + radius + arrowSize);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Small text indicator for larger icons
+            if (size >= 32) {
+                ctx.fillStyle = color;
+                ctx.font = `bold ${Math.max(8, size / 10)}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.fillText('A', center, center + radius + arrowSize * 2.5);
+            }
+        }
+
+        function downloadIcon(canvasId, filename) {
+            const canvas = document.getElementById(canvasId);
+            const link = document.createElement('a');
+            link.download = filename;
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+            
+            // Show feedback
+            const btn = event.target;
+            const originalText = btn.textContent;
+            btn.textContent = '✅ Downloaded!';
+            btn.style.background = '#28a745';
+            setTimeout(() => {
+                btn.textContent = originalText;
+                btn.style.background = '#007bff';
+            }, 2000);
+        }
+
+        // Generate all icons when page loads
+        window.onload = function() {
+            const blueColor = '#2563eb';   // Bright blue
+            const greyColor = '#6b7280';   // Muted grey
+            
+            // Blue icons
+            drawIcon(document.getElementById('blue16'), blueColor, 16);
+            drawIcon(document.getElementById('blue48'), blueColor, 48);
+            drawIcon(document.getElementById('blue128'), blueColor, 128);
+            
+            // Grey icons  
+            drawIcon(document.getElementById('grey16'), greyColor, 16);
+            drawIcon(document.getElementById('grey48'), greyColor, 48);
+            drawIcon(document.getElementById('grey128'), greyColor, 128);
+            
+            console.log('✅ Icons generated! You should see a clear difference between blue and grey versions.');
+        };
+    </script>
+</body>
+</html>

@@ -12,6 +12,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const errorDetails = document.getElementById('errorDetails');
     const appUrlInput = document.getElementById('appUrl');
     
+    // Check if u-core.test is open before initializing
+    checkUCoreTestAvailability();
+    
     // Load saved settings
     loadSettings();
     
@@ -29,6 +32,55 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Auto-update status every 5 seconds
     setInterval(updateStatus, 5000);
+    
+    // Auto-check u-core.test availability every 3 seconds
+    setInterval(checkUCoreTestAvailability, 3000);
+    
+    function checkUCoreTestAvailability() {
+        chrome.tabs.query({}, function(tabs) {
+            const isUCoreOpen = tabs.some(tab => 
+                tab.url && tab.url.includes('u-core.test')
+            );
+            
+            updateUIBasedOnUCoreAvailability(isUCoreOpen);
+        });
+    }
+    
+    function updateUIBasedOnUCoreAvailability(isUCoreOpen) {
+        if (!isUCoreOpen) {
+            // Disable all action buttons
+            syncBtn.disabled = true;
+            testBtn.disabled = true;
+            viewBtn.disabled = true;
+            clearBtn.disabled = true;
+            
+            // Update button text to show requirement
+            syncBtn.textContent = '❌ Open u-core.test first';
+            testBtn.textContent = '❌ Open u-core.test first';
+            viewBtn.textContent = '❌ Open u-core.test first';
+            clearBtn.textContent = '❌ Open u-core.test first';
+            
+            // Show clear status message
+            showStatus('⚠️ u-core.test not open - please open u-core.test in your browser to use this extension', 'warning');
+        } else {
+            // Re-enable all action buttons
+            syncBtn.disabled = false;
+            testBtn.disabled = false;
+            viewBtn.disabled = false;
+            clearBtn.disabled = false;
+            
+            // Restore normal button text
+            syncBtn.textContent = '🔄 Sync Cookies to App';
+            testBtn.textContent = '🧪 Test Connection';
+            viewBtn.textContent = '👁️ View Current Cookies';
+            clearBtn.textContent = '🗑️ Clear ANAF Cookies';
+            
+            // Clear the warning if it was showing
+            if (statusDiv.textContent.includes('u-core.test not open')) {
+                showStatus('✅ u-core.test detected - extension ready to use', 'success');
+            }
+        }
+    }
     
     function loadSettings() {
         chrome.storage.sync.get(['appUrl'], function(result) {

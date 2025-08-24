@@ -24,6 +24,22 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ]);
     })->name('spv-test');
 
+    // Firme routes
+    Route::get('firme', [\App\Http\Controllers\FirmeController::class, 'index'])
+        ->name('firme.index');
+
+    Route::post('firme/process', [\App\Http\Controllers\FirmeController::class, 'processQueue'])
+        ->name('firme.process');
+
+    Route::post('firme/approve', [\App\Http\Controllers\FirmeController::class, 'approve'])
+        ->name('firme.approve');
+
+    Route::post('firme/reject', [\App\Http\Controllers\FirmeController::class, 'reject'])
+        ->name('firme.reject');
+
+    Route::post('firme/mass-action', [\App\Http\Controllers\FirmeController::class, 'massAction'])
+        ->name('firme.mass-action');
+
     // ANAF routes removed - authentication handled directly in SPV
 });
 
@@ -58,8 +74,6 @@ Route::prefix('api/anaf')->group(function () {
     Route::post('/global-cookies/use', [AnafBrowserSessionController::class, 'useGlobalCookies'])
         ->name('anaf.global.use');
 
-    Route::post('/run-cookie-scraper', [AnafBrowserSessionController::class, 'runCookieScraper'])
-        ->name('anaf.cookie.scraper');
 });
 
 // ANAF Cookie Helper (accessible without auth for browser window)

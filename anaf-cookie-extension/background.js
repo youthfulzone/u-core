@@ -1,14 +1,83 @@
 // Background service worker for ANAF Cookie Helper
-// Enhanced version with improved error handling and retry logic
+// Enhanced version with improved error handling, retry logic, and conservative resource usage
+// 
+// Resource Conservation Strategy:
+// - 15 second minimum between sync attempts (prevents excessive API calls)
+// - 8 second minimum between status reports (lighter operations)
+// - 3 second batching delay (groups rapid cookie changes together)
+// - Tab detection (only works when u-core.test is open)
+// - Smart retry logic with exponential backoff
 
 let syncInProgress = false;
 let lastSyncAttempt = 0;
-const MIN_SYNC_INTERVAL = 5000; // Minimum 5 seconds between sync attempts
+let lastStatusReport = 0;
+let pendingSyncTimeout = null;
+let currentIconState = 'grey'; // Track current icon state
+const MIN_SYNC_INTERVAL = 15000; // Minimum 15 seconds between cookie syncs (conservative)
+const MIN_STATUS_INTERVAL = 8000; // Minimum 8 seconds between status reports 
+const BATCH_SYNC_DELAY = 3000; // Wait 3 seconds to batch multiple rapid changes
 const MAX_RETRY_ATTEMPTS = 3;
-const RETRY_DELAY_BASE = 2000; // Base delay for exponential backoff
+const RETRY_DELAY_BASE = 2000; // 2 second base delay for retries
 
-// Enhanced cookie change monitoring
-chrome.cookies.onChanged.addListener((changeInfo) => {
+// Icon paths for different states
+const ICONS = {
+  blue: {
+    16: 'icon16-blue.png',
+    48: 'icon48-blue.png', 
+    128: 'icon128-blue.png'
+  },
+  grey: {
+    16: 'icon16-grey.png',
+    48: 'icon48-grey.png',
+    128: 'icon128-grey.png'
+  }
+};
+
+// Icon management functions
+async function updateExtensionIcon(state) {
+  console.log(`[ANAF Extension] updateExtensionIcon called with state: ${state}, current: ${currentIconState}`);
+  
+  if (currentIconState === state) {
+    console.log(`[ANAF Extension] Icon already in ${state} state, no change needed`);
+    return; // No change needed
+  }
+  
+  try {
+    console.log(`[ANAF Extension] Switching icon from ${currentIconState} to ${state}`);
+    console.log(`[ANAF Extension] Icon paths:`, ICONS[state]);
+    
+    await chrome.action.setIcon({
+      path: ICONS[state]
+    });
+    
+    currentIconState = state;
+    console.log(`[ANAF Extension] ✅ Icon successfully updated to ${state} state`);
+    
+    // Update tooltip based on state
+    const title = state === 'blue' 
+      ? 'ANAF Cookie Helper - Ready (u-core.test active)'
+      : 'ANAF Cookie Helper - Inactive (u-core.test required)';
+    
+    await chrome.action.setTitle({ title });
+    console.log(`[ANAF Extension] ✅ Tooltip updated: ${title}`);
+    
+  } catch (error) {
+    console.error('[ANAF Extension] ❌ Failed to update icon:', error);
+    console.error('[ANAF Extension] Error details:', error.message);
+  }
+}
+
+// Monitor u-core.test availability and update icon accordingly
+async function checkAndUpdateIconState() {
+  console.log(`[ANAF Extension] checkAndUpdateIconState called`);
+  const isUCoreOpen = await isUCoreTestTabOpen();
+  const newState = isUCoreOpen ? 'blue' : 'grey';
+  console.log(`[ANAF Extension] u-core.test open: ${isUCoreOpen}, new state: ${newState}`);
+  await updateExtensionIcon(newState);
+}
+
+// Enhanced cookie change monitoring with u-core.test tab check
+chrome.cookies.onChanged.addListener(async (changeInfo) => {
   const cookie = changeInfo.cookie;
   
   // Check if it's specifically a webserviced.anaf.ro cookie
@@ -16,28 +85,101 @@ chrome.cookies.onChanged.addListener((changeInfo) => {
     console.log('[ANAF Extension] Cookie changed:', cookie.name, cookie.domain, 
                 changeInfo.removed ? '(removed)' : '(added/updated)');
     
+    // Update icon state when cookies change
+    await checkAndUpdateIconState();
+    
+    // Check if u-core.test is open before syncing
+    const isUCoreOpen = await isUCoreTestTabOpen();
+    if (!isUCoreOpen) {
+      console.log('[ANAF Extension] u-core.test not open, skipping auto-sync');
+      return;
+    }
+    
     // Only sync on cookie additions/updates, not removals
     if (!changeInfo.removed) {
-      // If it's a key ANAF session cookie, auto-sync with rate limiting
+      // If it's a key ANAF session cookie, schedule smart batched sync
       const keyCookies = ['MRHSession', 'F5_ST', 'LastMRH_Session', 'JSESSIONID'];
       if (keyCookies.includes(cookie.name)) {
-        console.log('[ANAF Extension] Key cookie detected, scheduling auto-sync...');
-        scheduleSync('cookie_change', cookie.name);
+        console.log('[ANAF Extension] Key cookie detected, scheduling batched auto-sync...');
+        scheduleBatchedSync('cookie_change', cookie.name);
       }
+    } else {
+      // Cookie was removed - check remaining cookies and report status
+      const remainingCookies = await chrome.cookies.getAll({domain: "webserviced.anaf.ro"});
+      const keyCookieCount = remainingCookies.filter(c => 
+        ['MRHSession', 'F5_ST', 'LastMRH_Session'].includes(c.name)
+      ).length;
+      
+      console.log(`[ANAF Extension] Cookie removed, ${keyCookieCount}/3 key cookies remaining`);
+      await reportCookieStatus(keyCookieCount, 'cookie_removed');
     }
   }
 });
 
-// Enhanced page load monitoring
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && tab.url && tab.url.startsWith('https://webserviced.anaf.ro/')) {
-    console.log('[ANAF Extension] ANAF page loaded, scheduling cookie check...');
-    // Wait for page to fully load and cookies to be set
-    setTimeout(() => {
-      scheduleSync('page_load', tab.url);
-    }, 3000);
+// Enhanced page load monitoring with conservative timing
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  // Update icon state when tabs change (especially on u-core.test pages)
+  if (changeInfo.status === 'complete' && tab.url) {
+    if (tab.url.includes('u-core.test')) {
+      console.log('[ANAF Extension] u-core.test page loaded, updating icon to active state');
+      await checkAndUpdateIconState();
+    }
+    
+    if (tab.url.startsWith('https://webserviced.anaf.ro/')) {
+      console.log('[ANAF Extension] ANAF page loaded, scheduling conservative cookie check...');
+      // Wait longer for page to fully load and cookies to be set, then use batched sync
+      setTimeout(() => {
+        scheduleBatchedSync('page_load', tab.url);
+      }, 8000); // Increased delay to ensure cookies are fully set
+    }
   }
 });
+
+// Monitor tab removal to update icon state
+chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
+  // Small delay to allow tab list to update, then check if u-core.test is still open
+  setTimeout(async () => {
+    await checkAndUpdateIconState();
+  }, 500);
+});
+
+// Monitor when tabs become active/inactive  
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  await checkAndUpdateIconState();
+});
+
+// Initialize extension - set initial icon state
+chrome.runtime.onStartup.addListener(async () => {
+  console.log('[ANAF Extension] Extension starting up, checking initial icon state...');
+  await checkAndUpdateIconState();
+});
+
+chrome.runtime.onInstalled.addListener(async () => {
+  console.log('[ANAF Extension] Extension installed/updated, setting initial icon state...');
+  await checkAndUpdateIconState();
+});
+
+// Periodic icon state check (every 30 seconds)
+setInterval(async () => {
+  await checkAndUpdateIconState();
+}, 30000);
+
+// Smart batched sync scheduling to reduce resource consumption
+function scheduleBatchedSync(trigger, detail) {
+  // Clear any existing pending sync to batch rapid changes
+  if (pendingSyncTimeout) {
+    console.log('[ANAF Extension] Batching sync - clearing previous timeout');
+    clearTimeout(pendingSyncTimeout);
+  }
+  
+  console.log(`[ANAF Extension] Batched sync scheduled: ${trigger} (${detail}) - will execute in ${BATCH_SYNC_DELAY}ms`);
+  
+  // Schedule the sync with batching delay
+  pendingSyncTimeout = setTimeout(() => {
+    pendingSyncTimeout = null;
+    scheduleSync(trigger, detail);
+  }, BATCH_SYNC_DELAY);
+}
 
 // Smart sync scheduling with rate limiting
 function scheduleSync(trigger, detail) {
@@ -59,6 +201,79 @@ function scheduleSync(trigger, detail) {
   syncCookiesToApp(trigger);
 }
 
+// Check if u-core.test is open in any tab (STRICT - only u-core.test allowed)
+async function isUCoreTestTabOpen() {
+  try {
+    const tabs = await chrome.tabs.query({});
+    console.log(`[ANAF Extension] Checking ${tabs.length} tabs for u-core.test`);
+    
+    const ucoreTabs = tabs.filter(tab => tab.url && tab.url.includes('u-core.test'));
+    console.log(`[ANAF Extension] Found ${ucoreTabs.length} u-core.test tabs:`, ucoreTabs.map(t => t.url));
+    
+    return ucoreTabs.length > 0;
+  } catch (error) {
+    console.error('[ANAF Extension] Error checking tabs:', error);
+    return false; // Default to false if can't check
+  }
+}
+
+// Report cookie status to the application with conservative rate limiting
+async function reportCookieStatus(cookieCount, trigger = 'status_check') {
+  try {
+    const now = Date.now();
+    
+    // Conservative rate limiting for status reports
+    if (now - lastStatusReport < MIN_STATUS_INTERVAL) {
+      console.log(`[ANAF Extension] Status report rate limited (${now - lastStatusReport}ms < ${MIN_STATUS_INTERVAL}ms), skipping`);
+      return;
+    }
+    
+    // Only report if u-core.test is open
+    const isUCoreOpen = await isUCoreTestTabOpen();
+    if (!isUCoreOpen) {
+      console.log('[ANAF Extension] u-core.test not open, skipping status report');
+      return;
+    }
+    
+    lastStatusReport = now;
+
+    const storage = await chrome.storage.sync.get(['appUrl']);
+    const appUrl = storage.appUrl || 'https://u-core.test';
+    
+    const statusData = {
+      cookie_count: cookieCount,
+      required_count: 3,
+      status: cookieCount === 3 ? 'complete' : cookieCount === 1 ? 'expired' : cookieCount === 2 ? 'incomplete' : 'no_session',
+      timestamp: Date.now(),
+      source: 'browser_extension_status',
+      trigger: trigger,
+      extension_version: '1.0.5'
+    };
+    
+    console.log(`[ANAF Extension] Reporting cookie status: ${cookieCount}/3 cookies (${statusData.status})`);
+    
+    const response = await fetch(`${appUrl}/api/anaf/extension-cookies`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Extension-Version': '1.0.5',
+        'X-Cookie-Status': statusData.status
+      },
+      body: JSON.stringify(statusData)
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      console.log(`[ANAF Extension] ✅ Status reported successfully:`, data);
+    } else {
+      console.warn(`[ANAF Extension] ⚠️ Status report failed:`, response.status);
+    }
+    
+  } catch (error) {
+    console.error('[ANAF Extension] Error reporting cookie status:', error);
+  }
+}
+
 // Enhanced function to sync cookies to the Laravel app with retry logic
 async function syncCookiesToApp(trigger = 'manual', retryCount = 0) {
   // Set sync in progress flag
@@ -68,28 +283,49 @@ async function syncCookiesToApp(trigger = 'manual', retryCount = 0) {
   try {
     console.log(`[ANAF Extension] Starting sync attempt ${retryCount + 1}/${MAX_RETRY_ATTEMPTS + 1} (trigger: ${trigger})`);
     
+    // Check if u-core.test is open (REQUIRED for ALL operations)
+    const isUCoreOpen = await isUCoreTestTabOpen();
+    if (!isUCoreOpen) {
+      console.log('[ANAF Extension] u-core.test not open, skipping sync');
+      await updateSyncStatus('tab_not_open', 'u-core.test tab not open - extension only works when u-core.test is open');
+      return;
+    }
+    
     // Get ONLY webserviced.anaf.ro cookies
     const webservicedCookies = await chrome.cookies.getAll({domain: "webserviced.anaf.ro"});
     
     if (webservicedCookies.length === 0) {
       console.log('[ANAF Extension] No webserviced.anaf.ro cookies found');
       await updateSyncStatus('no_cookies', 'No ANAF cookies found');
+      await reportCookieStatus(0, trigger);
       return;
     }
     
-    // Enhanced cookie filtering with better logic
+    // Filter for EXACTLY the 3 required ANAF session cookies
+    const requiredCookieNames = ['MRHSession', 'F5_ST', 'LastMRH_Session'];
     const relevantCookies = webservicedCookies.filter(cookie => {
-      // Include session cookies (no expiration date) and key ANAF cookies
-      const isSessionCookie = cookie.session;
-      const isKeyCookie = ['MRHSession', 'F5_ST', 'LastMRH_Session', 'JSESSIONID'].includes(cookie.name);
+      const isRequiredCookie = requiredCookieNames.includes(cookie.name);
       const isRecentCookie = !cookie.expirationDate || (cookie.expirationDate * 1000) > Date.now();
       
-      return (isSessionCookie || isKeyCookie) && isRecentCookie;
+      return isRequiredCookie && isRecentCookie;
     });
     
-    if (relevantCookies.length === 0) {
-      console.log('[ANAF Extension] No relevant/valid ANAF cookies found');
-      await updateSyncStatus('invalid_cookies', 'No valid ANAF session cookies found');
+    // Count exactly how many of the required cookies we have
+    const keyCookieCount = relevantCookies.length;
+    console.log(`[ANAF Extension] Found ${keyCookieCount}/3 required cookies:`, 
+                relevantCookies.map(c => c.name).join(', '));
+    
+    // Report cookie status regardless of count
+    await reportCookieStatus(keyCookieCount, trigger);
+    
+    if (keyCookieCount < 3) {
+      const missingCookies = requiredCookieNames.filter(name => 
+        !relevantCookies.some(cookie => cookie.name === name)
+      );
+      
+      console.log(`[ANAF Extension] Insufficient cookies - missing: ${missingCookies.join(', ')}`);
+      await updateSyncStatus('insufficient_cookies', 
+        `Only ${keyCookieCount}/3 required cookies found. Missing: ${missingCookies.join(', ')}`);
       return;
     }
     
@@ -339,6 +575,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // Test connection to the Laravel app
 async function testConnection() {
   try {
+    // Check if u-core.test is open (REQUIRED for ALL operations)
+    const isUCoreOpen = await isUCoreTestTabOpen();
+    if (!isUCoreOpen) {
+      return {
+        success: false,
+        message: 'u-core.test tab not open - please open u-core.test in your browser first',
+        errorType: 'TAB_NOT_OPEN',
+        troubleshooting: [
+          'Open u-core.test in your browser',
+          'Navigate to any page on the site',
+          'Return to this popup and test connection again',
+          'The extension only works when u-core.test is open'
+        ]
+      };
+    }
+    
     const result = await chrome.storage.sync.get(['appUrl']);
     let appUrl = result.appUrl || 'https://u-core.test';
     

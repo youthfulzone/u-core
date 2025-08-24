@@ -62,11 +62,28 @@ interface ApiCallStatus {
     }>
 }
 
+interface SessionStatus {
+    active: boolean
+    validated: boolean
+    expires_at: string | null
+    remaining_seconds: number | null
+    remaining_minutes: number | null
+    expiring_soon: boolean
+    cookie_names: string[]
+    required_cookies_found: string[]
+    required_cookies_missing: string[]
+    session_quality: 'excellent' | 'incomplete' | 'insufficient' | 'expired' | 'invalid' | 'unknown'
+    source: string
+    imported_at: string | null
+    authentication_status: string
+}
+
 interface SpvIndexProps {
     messages: SpvMessage[]
     requests: SpvRequest[]
     sessionActive: boolean
     sessionExpiry: string | null
+    sessionStatus: SessionStatus
     documentTypes: Record<string, string>
     incomeReasons: string[]
     apiCallStatus?: ApiCallStatus
@@ -92,6 +109,7 @@ export default function SpvIndex({
     requests, 
     sessionActive, 
     sessionExpiry,
+    sessionStatus,
     documentTypes,
     incomeReasons,
     apiCallStatus
@@ -122,6 +140,58 @@ export default function SpvIndex({
         setConnectionStatus(sessionActive ? 'connected' : 'disconnected')
     }, [apiCallStatus, sessionActive])
 
+    // Function to get session status message based on quality
+    const getSessionStatusMessage = () => {
+        if (!sessionStatus) return null
+
+        switch (sessionStatus.session_quality) {
+            case 'expired':
+                return {
+                    type: 'warning' as const,
+                    title: 'Sesiune ANAF Expirată',
+                    message: 'Sesiunea ANAF a expirat. Este necesar să vă reautentificați la ANAF pentru a continua sincronizarea.',
+                    action: 'Reautentificare necesară'
+                }
+            case 'incomplete':
+                return {
+                    type: 'warning' as const,
+                    title: 'Sesiune ANAF Incompletă',
+                    message: `Doar ${sessionStatus.required_cookies_found.length}/3 cookie-uri necesare. Lipsă: ${sessionStatus.required_cookies_missing.join(', ')}. Este necesară reautentificarea.`,
+                    action: 'Reautentificare necesară - 3 cookie-uri obligatorii'
+                }
+            case 'insufficient':
+                return {
+                    type: 'warning' as const,
+                    title: 'Sesiune ANAF Insuficientă',
+                    message: `Doar ${sessionStatus.required_cookies_found.length}/3 cookie-uri necesare. Este necesară reautentificarea completă.`,
+                    action: 'Reautentificare necesară - 3 cookie-uri obligatorii'
+                }
+            case 'excellent':
+                return {
+                    type: 'success' as const,
+                    title: 'Sesiune ANAF Optimă',
+                    message: 'Toate cookie-urile necesare sunt prezente. Sesiunea este complet funcțională.',
+                    action: null
+                }
+            case 'invalid':
+                return {
+                    type: 'error' as const,
+                    title: 'Sesiune ANAF Invalidă',
+                    message: 'Nu există cookie-uri valide ANAF. Este necesară autentificarea.',
+                    action: 'Autentificare necesară'
+                }
+            default:
+                if (!sessionStatus.active) {
+                    return {
+                        type: 'warning' as const,
+                        title: 'Nicio Sesiune ANAF',
+                        message: 'Nu există o conexiune activă cu ANAF. Apăsați "Conectează ANAF" pentru autentificare.',
+                        action: 'Autentificare necesară'
+                    }
+                }
+                return null
+        }
+    }
 
     // Function to reset API call counter
     const handleResetApiCounter = async () => {
@@ -412,66 +482,34 @@ export default function SpvIndex({
             console.log('✅ preventDefault() and stopPropagation() called successfully - NO ERRORS')
         }
         
-        // FIRST: Try Python cookie scraper, if it fails, use browser-based extraction
-        console.log('🐍 Running Python cookie scraper (scrap.py)...')
-        setSyncMessage('🔄 Se extrag cookie-urile din browser...')
+        // Use Chrome extension for automatic sync if available
+        console.log('🔌 Checking Chrome extension for automatic sync...')
+        setSyncMessage('🔄 Se verifică extensia Chrome pentru sincronizare automată...')
         
-        let scraperSuccess = false
-        
-        try {
-            const scraperResponse = await fetch('/api/anaf/run-cookie-scraper', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
-                }
-            })
-            
-            const scraperResult = await scraperResponse.json()
-            console.log('🐍 Python scraper result:', scraperResult)
-            
-            if (scraperResult.success) {
-                console.log('✅ Cookie scraping successful!')
-                setSyncMessage('✅ Cookie-uri extrase cu succes!')
-                scraperSuccess = true
-            } else {
-                console.warn('⚠️ Python scraper failed, trying browser method:', scraperResult)
+        // Try extension sync first
+        if (window.anafCookieHelper && extensionAvailable) {
+            try {
+                console.log('🔌 Extension available, attempting sync...')
+                setSyncMessage('🔌 Se sincronizează prin extensia Chrome...')
                 
-                // If Chrome is running or no cookies found, use browser-based extraction
-                if (scraperResult.output && (scraperResult.output.includes('database locked') || scraperResult.output.includes('No ANAF cookies found'))) {
-                    console.log('🌐 Switching to browser-based cookie extraction...')
-                    setSyncMessage('🌐 Se deschide ANAF pentru extragerea cookie-urilor...')
-                    
-                    // Open ANAF cookie helper
-                    const helperWindow = window.open(
-                        '/anaf/cookie-helper', 
-                        '_blank',
-                        'width=800,height=700,scrollbars=yes'
-                    )
-                    
-                    if (helperWindow) {
-                        setSyncMessage('🔐 Urmați instrucțiunile din fereastra deschisă pentru autentificare')
-                        setTimeout(() => setSyncMessage(null), 8000)
-                        setLoading(false)
-                        return
-                    } else {
-                        setSyncMessage('❌ Nu s-a putut deschide helper-ul. Verificați popup blocker.')
-                        setTimeout(() => setSyncMessage(null), 5000)
-                        setLoading(false)
-                        return
-                    }
+                const extensionResult = await window.anafCookieHelper.manualSync()
+                
+                if (extensionResult.success) {
+                    console.log('✅ Extension sync successful!')
+                    setSyncMessage('✅ Extensia Chrome a sincronizat cu succes!')
+                    setExtensionLastSync(new Date().toISOString())
                 } else {
-                    setSyncMessage('⚠️ Extragerea cookie-urilor a eșuat, se continuă...')
+                    console.warn('⚠️ Extension sync failed:', extensionResult.error)
+                    setSyncMessage('⚠️ Sincronizarea prin extensie a eșuat. Se încearcă conexiunea directă...')
                 }
+            } catch (extensionError) {
+                console.warn('⚠️ Extension communication failed:', extensionError)
+                setSyncMessage('⚠️ Comunicarea cu extensia a eșuat. Se încearcă conexiunea directă...')
             }
-        } catch (scraperError) {
-            console.warn('⚠️ Cookie scraper request failed:', scraperError)
-            setSyncMessage('⚠️ Eroare la extragerea cookie-urilor, se continuă...')
+        } else {
+            console.log('🌐 No extension available, checking direct connection...')
+            setSyncMessage('🌐 Nu există extensie disponibilă. Se verifică conexiunea directă...')
         }
-        
-        // Small delay to let user see the scraping message
-        await new Promise(resolve => setTimeout(resolve, 1000))
         
         console.log('🔄 Starting background AJAX sync process...')
         
@@ -821,9 +859,9 @@ export default function SpvIndex({
             
             <div className="flex h-full flex-1 flex-col gap-4 rounded-xl p-4 overflow-x-auto">
                 {/* Main Content Area */}
-                <div className="relative min-h-[60vh] flex-1 overflow-hidden rounded-xl border border-sidebar-border/70 md:min-h-min dark:border-sidebar-border p-6">
+                <div className="relative min-h-[60vh] flex-1 overflow-hidden rounded-xl border border-sidebar-border/70 md:min-h-min dark:border-sidebar-border">
                     {/* Connection Status and Controls */}
-                    <div className="mb-6">
+                    <div className="mb-6 p-6 pb-0">
                         <div className="flex items-center justify-between mb-4">
                             <h2 className="text-lg font-semibold">
                                 Mesaje ANAF ({filteredMessages.length}{messages.length !== filteredMessages.length ? ` din ${messages.length}` : ''})
@@ -862,15 +900,51 @@ export default function SpvIndex({
                             </div>
                         </div>
                         
-                        {/* Connection Status Alert */}
-                        {(!sessionActive && connectionStatus === 'disconnected') && (
-                            <Alert className="mb-4 border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-950">
-                                <AlertCircle className="h-4 w-4 text-orange-600" />
-                                <AlertDescription className="text-orange-700 dark:text-orange-300">
-                                    Nu există o conexiune activă cu ANAF. Apăsați "Conectează ANAF" pentru a vă autentifica și a activa sincronizarea mesajelor.
-                                </AlertDescription>
-                            </Alert>
-                        )}
+                        {/* Enhanced Session Status Alert */}
+                        {(() => {
+                            const statusMessage = getSessionStatusMessage()
+                            if (!statusMessage) return null
+
+                            const alertColors = {
+                                error: 'border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950',
+                                warning: 'border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-950',
+                                info: 'border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950',
+                                success: 'border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950'
+                            }
+
+                            const textColors = {
+                                error: 'text-red-700 dark:text-red-300',
+                                warning: 'text-orange-700 dark:text-orange-300',
+                                info: 'text-blue-700 dark:text-blue-300',
+                                success: 'text-green-700 dark:text-green-300'
+                            }
+
+                            const iconColors = {
+                                error: 'text-red-600',
+                                warning: 'text-orange-600',
+                                info: 'text-blue-600',
+                                success: 'text-green-600'
+                            }
+
+                            return (
+                                <Alert className={`mb-4 ${alertColors[statusMessage.type]}`}>
+                                    <AlertCircle className={`h-4 w-4 ${iconColors[statusMessage.type]}`} />
+                                    <AlertDescription className={textColors[statusMessage.type]}>
+                                        <strong>{statusMessage.title}:</strong> {statusMessage.message}
+                                        {statusMessage.action && (
+                                            <div className="mt-2 text-sm opacity-90">
+                                                📍 {statusMessage.action}
+                                            </div>
+                                        )}
+                                        {sessionStatus && sessionStatus.session_quality === 'expired' && (
+                                            <div className="mt-2 text-xs opacity-75">
+                                                Cookie-uri disponibile: {sessionStatus.cookie_names.join(', ')}
+                                            </div>
+                                        )}
+                                    </AlertDescription>
+                                </Alert>
+                            )
+                        })()}
                         
                         {/* Cookie Extraction Help */}
                         {!sessionActive && (
@@ -889,7 +963,7 @@ export default function SpvIndex({
                     
                     <>
                         {messages.length === 0 ? (
-                            <div className="text-center py-12">
+                            <div className="text-center py-12 px-6">
                                 <Icon iconNode={Mail} className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                                 <p className="text-muted-foreground font-medium">Nu au fost găsite mesaje</p>
                                 <p className="text-sm text-muted-foreground mt-2">
@@ -902,7 +976,7 @@ export default function SpvIndex({
                                             <table className="w-full table-fixed">
                                                 <thead className="border-b bg-muted/50">
                                                     <tr>
-                                                        <th className="text-left p-4 font-semibold text-sm w-[200px]">
+                                                        <th className="text-left p-4 font-semibold text-sm w-[160px]">
                                                             <div className="flex items-center gap-2">
                                                                 <span className="whitespace-nowrap">CIF</span>
                                                                 <Input
@@ -914,7 +988,7 @@ export default function SpvIndex({
                                                                 />
                                                             </div>
                                                         </th>
-                                                        <th className="text-left p-4 font-semibold text-sm w-[180px]">
+                                                        <th className="text-left p-4 font-semibold text-sm w-[220px]">
                                                             <div className="flex items-center gap-2">
                                                                 <span className="whitespace-nowrap">Tip document</span>
                                                                 <Select value={documentTypeFilter} onValueChange={setDocumentTypeFilter}>
@@ -932,9 +1006,9 @@ export default function SpvIndex({
                                                                 </Select>
                                                             </div>
                                                         </th>
-                                                        <th className="text-left p-4 font-semibold text-sm w-[140px]">Data afișare</th>
+                                                        <th className="text-left p-4 font-semibold text-sm w-[150px]">Data afișare</th>
                                                         <th className="text-left p-4 font-semibold text-sm w-[300px]">Detalii</th>
-                                                        <th className="text-left p-4 font-semibold text-sm w-[150px]">Descarcă document</th>
+                                                        <th className="text-left p-4 font-semibold text-sm w-[90px]">Descarcă</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody className={`transition-opacity duration-200 ease-in-out ${isTableUpdating ? 'opacity-50' : 'opacity-100'}`}>
@@ -952,7 +1026,7 @@ export default function SpvIndex({
                                                                 key={message.id} 
                                                                 className={`border-b hover:bg-muted/30 transition-colors duration-200 ease-in-out ${index % 2 === 0 ? 'bg-background' : 'bg-muted/10'}`}
                                                             >
-                                                            <td className="p-4 align-top w-[200px]">
+                                                            <td className="p-4 align-top w-[160px]">
                                                                 <div className="space-y-1">
                                                                     <div className="font-semibold text-sm truncate">{message.cif}</div>
                                                                     <div className="text-xs text-muted-foreground truncate">
@@ -960,12 +1034,12 @@ export default function SpvIndex({
                                                                     </div>
                                                                 </div>
                                                             </td>
-                                                            <td className="p-4 align-top w-[180px]">
+                                                            <td className="p-4 align-top w-[220px]">
                                                                 <Badge variant={getMessageTypeBadge(message.tip)} className="whitespace-nowrap">
                                                                     {getDocumentTypeDisplay(message.tip)}
                                                                 </Badge>
                                                             </td>
-                                                            <td className="p-4 align-top w-[140px]">
+                                                            <td className="p-4 align-top w-[150px]">
                                                                 <div className="text-sm font-medium">
                                                                     {formatRomanianDate(message.data_creare || message.formatted_date_creare || '')}
                                                                 </div>
@@ -975,15 +1049,15 @@ export default function SpvIndex({
                                                                     <div className="line-clamp-3">{message.detalii}</div>
                                                                 </div>
                                                             </td>
-                                                            <td className="p-4 align-top w-[150px]">
+                                                            <td className="p-4 align-top w-[90px]">
                                                                 <Button
                                                                     onClick={() => handleDownload(message.anaf_id)}
                                                                     size="sm"
                                                                     variant="outline"
-                                                                    className="whitespace-nowrap"
+                                                                    className="w-full text-xs px-1"
                                                                 >
-                                                                    <Icon iconNode={Download} className="w-4 h-4 mr-2" />
-                                                                    {message.downloaded_at ? "Descarcă din nou" : "Descarcă"}
+                                                                    <Icon iconNode={Download} className="w-3 h-3 mr-1" />
+                                                                    Descarcă
                                                                 </Button>
                                                             </td>
                                                         </tr>
@@ -993,16 +1067,16 @@ export default function SpvIndex({
                                                     {/* Empty placeholder rows to maintain consistent table height */}
                                                     {Array.from({ length: messagesPerPage - paginatedMessages.length - (paginatedMessages.length === 0 ? 1 : 0) }, (_, i) => (
                                                         <tr key={`empty-${i}`} className={`border-b ${(paginatedMessages.length + i) % 2 === 0 ? 'bg-background' : 'bg-muted/10'}`}>
-                                                            <td className="p-4 align-top w-[200px]">
+                                                            <td className="p-4 align-top w-[160px]">
                                                                 <div className="space-y-1">
                                                                     <div className="font-semibold text-sm truncate">&nbsp;</div>
                                                                     <div className="text-xs text-muted-foreground truncate">&nbsp;</div>
                                                                 </div>
                                                             </td>
-                                                            <td className="p-4 align-top w-[180px]">
+                                                            <td className="p-4 align-top w-[220px]">
                                                                 <div className="whitespace-nowrap">&nbsp;</div>
                                                             </td>
-                                                            <td className="p-4 align-top w-[140px]">
+                                                            <td className="p-4 align-top w-[150px]">
                                                                 <div className="text-sm font-medium">&nbsp;</div>
                                                             </td>
                                                             <td className="p-4 align-top w-[300px]">
@@ -1010,7 +1084,7 @@ export default function SpvIndex({
                                                                     <div className="line-clamp-3">&nbsp;</div>
                                                                 </div>
                                                             </td>
-                                                            <td className="p-4 align-top w-[150px]">
+                                                            <td className="p-4 align-top w-[90px]">
                                                                 <div className="whitespace-nowrap">&nbsp;</div>
                                                             </td>
                                                         </tr>
@@ -1021,7 +1095,7 @@ export default function SpvIndex({
                             
                             {/* Pagination Controls */}
                             {(
-                                <div className="flex items-center justify-between border-t bg-muted/20 px-4 py-3 rounded-b-lg">
+                                <div className="flex items-center justify-between border-t bg-muted/20 px-6 py-3 rounded-b-lg">
                                     <div className="flex items-center text-sm text-muted-foreground">
                                         <span>
                                             Afișate {startIndex + 1}-{Math.min(endIndex, filteredMessages.length)} din {filteredMessages.length} mesaje

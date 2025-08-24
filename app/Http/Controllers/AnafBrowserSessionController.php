@@ -316,13 +316,15 @@ class AnafBrowserSessionController extends Controller
         try {
             // Enhanced validation for improved extension
             $validation = $request->validate([
-                'cookies' => 'required',
+                'cookies' => 'sometimes',
                 'source' => 'required|string',
                 'timestamp' => 'sometimes|integer',
                 'browser_info' => 'sometimes|array',
                 'metadata' => 'sometimes|array',
                 'trigger' => 'sometimes|string',
                 'cookie_count' => 'sometimes|integer',
+                'required_count' => 'sometimes|integer',
+                'status' => 'sometimes|string',
                 'user_agent' => 'sometimes|string',
                 'extension_version' => 'sometimes|string',
             ]);
@@ -334,9 +336,36 @@ class AnafBrowserSessionController extends Controller
             $trigger = $request->input('trigger', 'unknown');
             $extensionVersion = $request->input('extension_version');
             $userAgent = $request->input('user_agent');
+            $cookieCount = $request->input('cookie_count', 0);
+            $requiredCount = $request->input('required_count', 3);
+            $cookieStatus = $request->input('status');
 
-            // Parse cookies based on format
+            // Handle cookie status reporting (when extension reports cookie counts)
+            if ($source === 'browser_extension_status' && $cookieStatus) {
+                Log::info('Extension cookie status report', [
+                    'status' => $cookieStatus,
+                    'cookie_count' => $cookieCount,
+                    'required_count' => $requiredCount,
+                    'trigger' => $trigger,
+                    'extension_version' => $extensionVersion,
+                ]);
+
+                return response()->json([
+                    'success' => true,
+                    'message' => "Cookie status received: $cookieStatus ($cookieCount/$requiredCount)",
+                    'status' => $cookieStatus,
+                    'cookie_count' => $cookieCount,
+                    'required_count' => $requiredCount,
+                    'processing_time_ms' => round((microtime(true) - LARAVEL_START) * 1000, 2),
+                ]);
+            }
+
+            // Parse cookies based on format (for actual cookie sync)
             $cookies = [];
+
+            if (! $cookiesInput) {
+                throw new \InvalidArgumentException('No cookies provided for sync');
+            }
 
             if (is_string($cookiesInput)) {
                 // String format from browser extension
@@ -560,35 +589,6 @@ class AnafBrowserSessionController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to use global cookies: '.$e->getMessage(),
-            ], 500);
-        }
-    }
-
-    public function runCookieScraper(): \Illuminate\Http\JsonResponse
-    {
-        try {
-            // Run the Python cookie scraper via Artisan command
-            $result = \Illuminate\Support\Facades\Artisan::call('anaf:scrap-cookies');
-            $output = \Illuminate\Support\Facades\Artisan::output();
-
-            return response()->json([
-                'success' => $result === 0,
-                'message' => $result === 0 ? 'Cookie scraping completed successfully' : 'Cookie scraping failed',
-                'output' => $output,
-                'exit_code' => $result,
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('Cookie scraper failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Cookie scraper execution failed: '.$e->getMessage(),
-                'output' => '',
-                'exit_code' => 1,
             ], 500);
         }
     }

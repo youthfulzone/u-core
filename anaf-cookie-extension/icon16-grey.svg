@@ -1,0 +1,23 @@
+<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+    <!-- Background circle -->
+    <circle cx="8" cy="8" r="6" fill="#6b7280" opacity="0.1" stroke="#6b7280" stroke-width="1"/>
+    
+    <!-- Cookie/sync icon -->
+    <g transform="translate(8, 8)">
+      <!-- Central circle (cookie) -->
+      <circle cx="0" cy="0" r="3" fill="none" stroke="#6b7280" stroke-width="1"/>
+      
+      <!-- Cookie dots -->
+      <circle cx="-1.2000000000000002" cy="-1.2000000000000002" r="1" fill="#6b7280"/>
+      <circle cx="1.2000000000000002" cy="-0.6000000000000001" r="0.8" fill="#6b7280"/>
+      <circle cx="-0.6000000000000001" cy="1.2000000000000002" r="0.6" fill="#6b7280"/>
+      <circle cx="1.2000000000000002" cy="1.2000000000000002" r="0.8" fill="#6b7280"/>
+      
+      <!-- Sync arrows -->
+      <path d="M-4.199999999999999,-1.2000000000000002 L-3,-2.4000000000000004 L-3,-1.7999999999999998 L-1.7999999999999998,-1.7999999999999998 L-1.7999999999999998,-0.6000000000000001 L-3,-0.6000000000000001 Z" fill="#6b7280"/>
+      <path d="M4.199999999999999,1.2000000000000002 L3,2.4000000000000004 L3,1.7999999999999998 L1.7999999999999998,1.7999999999999998 L1.7999999999999998,0.6000000000000001 L3,0.6000000000000001 Z" fill="#6b7280"/>
+    </g>
+    
+    <!-- Small text indicator -->
+    <text x="8" y="12" text-anchor="middle" font-family="Arial, sans-serif" font-size="5.6" font-weight="bold" fill="#6b7280">A</text>
+  </svg>

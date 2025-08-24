@@ -1,0 +1,23 @@
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+    <!-- Background circle -->
+    <circle cx="24" cy="24" r="21" fill="#2563eb" opacity="0.1" stroke="#2563eb" stroke-width="1.5"/>
+    
+    <!-- Cookie/sync icon -->
+    <g transform="translate(24, 24)">
+      <!-- Central circle (cookie) -->
+      <circle cx="0" cy="0" r="10.5" fill="none" stroke="#2563eb" stroke-width="1.5"/>
+      
+      <!-- Cookie dots -->
+      <circle cx="-4.2" cy="-4.2" r="1.5" fill="#2563eb"/>
+      <circle cx="4.2" cy="-2.1" r="1.2000000000000002" fill="#2563eb"/>
+      <circle cx="-2.1" cy="4.2" r="0.8999999999999999" fill="#2563eb"/>
+      <circle cx="4.2" cy="4.2" r="1.2000000000000002" fill="#2563eb"/>
+      
+      <!-- Sync arrows -->
+      <path d="M-14.7,-4.2 L-10.5,-8.4 L-10.5,-6.3 L-6.3,-6.3 L-6.3,-2.1 L-10.5,-2.1 Z" fill="#2563eb"/>
+      <path d="M14.7,4.2 L10.5,8.4 L10.5,6.3 L6.3,6.3 L6.3,2.1 L10.5,2.1 Z" fill="#2563eb"/>
+    </g>
+    
+    <!-- Small text indicator -->
+    <text x="24" y="44" text-anchor="middle" font-family="Arial, sans-serif" font-size="5.6" font-weight="bold" fill="#2563eb">A</text>
+  </svg>

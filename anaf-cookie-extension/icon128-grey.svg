@@ -1,0 +1,23 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+    <!-- Background circle -->
+    <circle cx="64" cy="64" r="56" fill="#6b7280" opacity="0.1" stroke="#6b7280" stroke-width="4"/>
+    
+    <!-- Cookie/sync icon -->
+    <g transform="translate(64, 64)">
+      <!-- Central circle (cookie) -->
+      <circle cx="0" cy="0" r="28" fill="none" stroke="#6b7280" stroke-width="4"/>
+      
+      <!-- Cookie dots -->
+      <circle cx="-11.200000000000001" cy="-11.200000000000001" r="4" fill="#6b7280"/>
+      <circle cx="11.200000000000001" cy="-5.6000000000000005" r="3.2" fill="#6b7280"/>
+      <circle cx="-5.6000000000000005" cy="11.200000000000001" r="2.4" fill="#6b7280"/>
+      <circle cx="11.200000000000001" cy="11.200000000000001" r="3.2" fill="#6b7280"/>
+      
+      <!-- Sync arrows -->
+      <path d="M-39.199999999999996,-11.200000000000001 L-28,-22.400000000000002 L-28,-16.8 L-16.8,-16.8 L-16.8,-5.6000000000000005 L-28,-5.6000000000000005 Z" fill="#6b7280"/>
+      <path d="M39.199999999999996,11.200000000000001 L28,22.400000000000002 L28,16.8 L16.8,16.8 L16.8,5.6000000000000005 L28,5.6000000000000005 Z" fill="#6b7280"/>
+    </g>
+    
+    <!-- Small text indicator -->
+    <text x="64" y="120" text-anchor="middle" font-family="Arial, sans-serif" font-size="11.2" font-weight="bold" fill="#6b7280">A</text>
+  </svg>

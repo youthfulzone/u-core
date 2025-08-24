@@ -539,15 +539,53 @@ class AnafSpvService
     public function importSessionCookies(array $cookies, string $source = 'manual'): bool
     {
         try {
-            // Validate that we have the necessary ANAF cookies
-            $requiredCookies = ['JSESSIONID', 'MRHSession', 'F5_ST', 'LastMRH_Session']; // ANAF session cookies
+            // Enhanced validation for ANAF session cookies
+            $requiredCookies = ['MRHSession', 'F5_ST', 'LastMRH_Session']; // Core ANAF session cookies
+            $optionalCookies = ['JSESSIONID']; // Optional but helpful
+
+            $foundCookies = [];
             $hasRequired = false;
 
-            foreach ($cookies as $name => $value) {
-                if (in_array($name, $requiredCookies) || str_contains($name, 'session') || str_contains($name, 'JSESSION') || str_contains($name, 'MRH')) {
-                    $hasRequired = true;
-                    break;
+            // Check which required cookies we have
+            foreach ($requiredCookies as $cookieName) {
+                if (isset($cookies[$cookieName]) && ! empty($cookies[$cookieName])) {
+                    $foundCookies[] = $cookieName;
                 }
+            }
+
+            // Also check for any session-related cookies as fallback
+            foreach ($cookies as $name => $value) {
+                if (in_array($name, $requiredCookies) || in_array($name, $optionalCookies) ||
+                    str_contains($name, 'session') || str_contains($name, 'JSESSION') || str_contains($name, 'MRH')) {
+                    $hasRequired = true;
+                }
+            }
+
+            // Detect expired session: only LastMRH_Session remains
+            if (count($foundCookies) === 1 && in_array('LastMRH_Session', $foundCookies)) {
+                Log::warning('ANAF session appears to be expired - only LastMRH_Session cookie found', [
+                    'found_cookies' => array_keys($cookies),
+                    'source' => $source,
+                ]);
+
+                // Clear any existing session
+                $this->clearSession();
+
+                return false;
+            }
+
+            // Require exactly 3 core cookies for a valid session
+            if (count($foundCookies) < 3) {
+                Log::warning('Insufficient ANAF session cookies for valid session - exactly 3 required', [
+                    'required_cookies' => $requiredCookies,
+                    'found_cookies' => $foundCookies,
+                    'found_count' => count($foundCookies),
+                    'required_count' => 3,
+                    'all_cookies' => array_keys($cookies),
+                    'source' => $source,
+                ]);
+
+                return false;
             }
 
             if (! $hasRequired) {
@@ -680,6 +718,36 @@ class AnafSpvService
         $source = is_array($sessionData) && isset($sessionData['source']) ? $sessionData['source'] : 'unknown';
         $validated = is_array($sessionData) && isset($sessionData['validated']) ? $sessionData['validated'] : false;
 
+        // Enhanced cookie validation analysis
+        $requiredCookies = ['MRHSession', 'F5_ST', 'LastMRH_Session'];
+        $foundRequiredCookies = [];
+        $sessionQuality = 'unknown';
+
+        if ($isActive && is_array($cookies)) {
+            foreach ($requiredCookies as $cookieName) {
+                if (isset($cookies[$cookieName]) && ! empty($cookies[$cookieName])) {
+                    $foundRequiredCookies[] = $cookieName;
+                }
+            }
+
+            // Determine session quality based on available cookies (exactly 3 required)
+            if (count($foundRequiredCookies) === 3) {
+                $sessionQuality = 'excellent'; // All 3 cookies present - only valid state
+            } elseif (count($foundRequiredCookies) === 2) {
+                $sessionQuality = 'incomplete'; // 2 cookies - insufficient for operation
+                $isActive = false; // Mark as inactive - need exactly 3
+            } elseif (count($foundRequiredCookies) === 1 && in_array('LastMRH_Session', $foundRequiredCookies)) {
+                $sessionQuality = 'expired'; // Only LastMRH_Session - session expired
+                $isActive = false; // Mark as inactive if expired
+            } elseif (count($foundRequiredCookies) === 1) {
+                $sessionQuality = 'insufficient'; // Only one cookie - insufficient
+                $isActive = false; // Mark as inactive
+            } else {
+                $sessionQuality = 'invalid'; // No required cookies
+                $isActive = false;
+            }
+        }
+
         return [
             'active' => $isActive,
             'validated' => $validated, // Only true after actual validation with ANAF
@@ -688,9 +756,13 @@ class AnafSpvService
             'remaining_minutes' => $remainingSeconds ? round($remainingSeconds / 60, 1) : null,
             'expiring_soon' => $this->isSessionExpiringSoon(),
             'cookie_names' => $isActive ? array_keys($cookies) : [],
+            'required_cookies_found' => $foundRequiredCookies,
+            'required_cookies_missing' => array_diff($requiredCookies, $foundRequiredCookies),
+            'session_quality' => $sessionQuality,
             'source' => $source,
             'imported_at' => is_array($sessionData) && isset($sessionData['imported_at']) ? $sessionData['imported_at'] : null,
-            'authentication_status' => $isActive ? ($validated ? 'authenticated' : 'pending_validation') : 'not_authenticated',
+            'authentication_status' => $isActive ? ($validated ? 'authenticated' : 'pending_validation') :
+                ($sessionQuality === 'expired' ? 'session_expired' : 'not_authenticated'),
         ];
     }
 
