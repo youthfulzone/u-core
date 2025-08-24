@@ -1,12 +1,11 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Head, router } from '@inertiajs/react'
 import AppLayout from '@/layouts/app-layout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { SearchableSelect, type SearchableSelectOption } from '@/components/ui/searchable-select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Label } from '@/components/ui/label';
 import { PlaceholderPattern } from '@/components/ui/placeholder-pattern';
 import { type BreadcrumbItem } from '@/types'
 import { FileText, Send, Clock, CheckCircle, XCircle } from 'lucide-react';
@@ -37,6 +36,7 @@ interface CifOption {
     cif: string;
     cui: string;
     company_name: string;
+    source?: 'company' | 'message';
 }
 
 interface Props {
@@ -64,6 +64,41 @@ export default function Requests({ requests, availableCifs, documentTypes }: Pro
     const [selectedCif, setSelectedCif] = useState<string>('')
     const [selectedDocumentType, setSelectedDocumentType] = useState<string>('Fisa Rol') // Auto-selected
     const [isSubmitting, setIsSubmitting] = useState(false)
+
+    // Convert CIF options to searchable select format
+    const searchableOptions: SearchableSelectOption[] = useMemo(() => {
+        return availableCifs
+            .filter(cifOption => cifOption.cif && cifOption.cif.trim() !== '' && cifOption.cif !== 'null')
+            .map(cifOption => {
+                // Ensure we have valid CIF/CUI
+                const cif = cifOption.cif || cifOption.cui || '';
+                const companyName = cifOption.company_name && cifOption.company_name.trim() !== '' 
+                    ? cifOption.company_name.trim() 
+                    : '';
+                
+                return {
+                    value: cif,
+                    label: companyName 
+                        ? `${companyName} (CUI: ${cif})`
+                        : `CUI: ${cif}`,
+                    searchTerms: [
+                        cif,
+                        cifOption.cui,
+                        companyName
+                    ].filter(term => term && term.trim() !== '' && term !== 'null')
+                }
+            })
+            .filter(option => option.value && option.value !== '' && option.value !== 'null')
+    }, [availableCifs])
+
+    // Convert document types to searchable select format
+    const documentTypeOptions: SearchableSelectOption[] = useMemo(() => {
+        return Object.entries(documentTypes).map(([key, value]) => ({
+            value: key,
+            label: value,
+            searchTerms: [key, value]
+        }))
+    }, [documentTypes])
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
@@ -121,44 +156,32 @@ export default function Requests({ requests, availableCifs, documentTypes }: Pro
                     </CardHeader>
                     <CardContent>
                         <form onSubmit={handleSubmit}>
-                            <div className="flex items-center gap-4">
-                                <div className="flex items-center gap-2">
-                                    <Label htmlFor="cif-select" className="whitespace-nowrap text-sm font-semibold">CIF</Label>
-                                    <Select value={selectedCif} onValueChange={setSelectedCif}>
-                                        <SelectTrigger id="cif-select" className="h-8 text-xs bg-background/50 border-muted-foreground/30 focus:border-primary transition-colors w-[300px]">
-                                            <SelectValue placeholder="Selectează CIF" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {availableCifs.map((cifOption) => (
-                                                <SelectItem key={cifOption.cif} value={cifOption.cif}>
-                                                    {cifOption.company_name ? `${cifOption.company_name} (${cifOption.cif})` : cifOption.cif}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <Label htmlFor="document-type-select" className="whitespace-nowrap text-sm font-semibold">Tip document</Label>
-                                    <Select value={selectedDocumentType} onValueChange={setSelectedDocumentType}>
-                                        <SelectTrigger id="document-type-select" className="h-8 text-xs bg-background/50 border-muted-foreground/30 focus:border-primary transition-colors w-[200px]">
-                                            <SelectValue placeholder="Selectează tipul documentului" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {Object.entries(documentTypes).map(([key, value]) => (
-                                                <SelectItem key={key} value={key}>
-                                                    {value}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
+                            <div className="flex items-center gap-3">
+                                <SearchableSelect
+                                    options={searchableOptions}
+                                    value={selectedCif}
+                                    onValueChange={setSelectedCif}
+                                    placeholder="Selectează sau caută CUI/Nume companie"
+                                    searchPlaceholder="Caută după CUI sau nume companie..."
+                                    emptyMessage="Nu au fost găsite companii"
+                                    className="w-[500px]"
+                                />
+                                <SearchableSelect
+                                    options={documentTypeOptions}
+                                    value={selectedDocumentType}
+                                    onValueChange={setSelectedDocumentType}
+                                    placeholder="Selectează tipul"
+                                    searchPlaceholder="Caută tip document..."
+                                    emptyMessage="Nu au fost găsite tipuri"
+                                    className="w-[180px]"
+                                />
                                 <Button 
                                     type="submit" 
                                     disabled={!selectedCif || !selectedDocumentType || isSubmitting}
-                                    className="flex items-center gap-2"
+                                    className="flex items-center gap-2 whitespace-nowrap"
                                 >
                                     <Send className="h-4 w-4" />
-                                    {isSubmitting ? 'Se trimite...' : 'Trimite cererea'}
+                                    {isSubmitting ? 'Se trimite...' : 'Trimite'}
                                 </Button>
                             </div>
                         </form>

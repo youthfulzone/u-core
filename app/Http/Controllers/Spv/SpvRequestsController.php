@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Spv;
 
 use App\Http\Controllers\Controller;
+use App\Models\Company;
 use App\Models\Spv\SpvMessage;
 use App\Models\Spv\SpvRequest;
 use App\Services\AnafSpvService;
@@ -17,21 +18,54 @@ class SpvRequestsController extends Controller
 
     public function index()
     {
+        // Get companies from the Firme module (approved companies)
+        $companiesCifs = Company::select('cui', 'denumire')
+            ->whereNotNull('cui')
+            ->where('cui', '!=', '')
+            ->whereNotNull('denumire')
+            ->where('denumire', '!=', '')
+            ->orderBy('denumire')
+            ->get()
+            ->map(function ($company) {
+                return [
+                    'cif' => $company->cui ?? '',
+                    'cui' => $company->cui ?? '',
+                    'company_name' => $company->denumire ?? '',
+                    'source' => 'company',
+                ];
+            })
+            ->filter(function ($item) {
+                return ! empty($item['cif']) && ! empty($item['company_name']);
+            });
+
         // Get unique CIFs from messages for selection with company names
-        $availableCifs = SpvMessage::select('cif', 'cui', 'detalii')
+        $messagesCifs = SpvMessage::select('cif', 'cui', 'detalii')
             ->whereNotNull('cif')
             ->where('cif', '!=', '')
             ->distinct()
             ->orderBy('cif')
             ->get()
             ->map(function ($message) {
+                $companyName = $this->extractCompanyName($message->detalii ?? '');
+
                 return [
-                    'cif' => $message->cif,
-                    'cui' => $message->cui ?? $message->cif,
-                    'company_name' => $this->extractCompanyName($message->detalii ?? ''),
+                    'cif' => $message->cif ?? '',
+                    'cui' => $message->cui ?? $message->cif ?? '',
+                    'company_name' => $companyName,
+                    'source' => 'message',
                 ];
             })
+            ->filter(function ($item) {
+                return ! empty($item['cif']);
+            });
+
+        // Combine and deduplicate CIFs, prioritizing companies from Firme module
+        $availableCifs = $companiesCifs->concat($messagesCifs)
             ->unique('cif')
+            ->sortBy(function ($item) {
+                // Sort by company name, then by CIF
+                return ($item['company_name'] ?? 'ZZZZ').'_'.$item['cif'];
+            })
             ->values()
             ->toArray();
 
@@ -61,15 +95,23 @@ class SpvRequestsController extends Controller
             'document_type' => 'required|string|in:Fisa Rol',
         ]);
 
-        // Get company name from messages
-        $message = SpvMessage::where('cif', $request->cif)->first();
-        $companyName = $message ? $this->extractCompanyName($message->detalii ?? '') : '';
+        // First try to get company name from Firme module
+        $company = Company::where('cui', $request->cif)->first();
+        $companyName = '';
+
+        if ($company) {
+            $companyName = $company->denumire ?? '';
+        } else {
+            // Fallback to messages if not found in companies
+            $message = SpvMessage::where('cif', $request->cif)->first();
+            $companyName = $message ? $this->extractCompanyName($message->detalii ?? '') : '';
+        }
 
         // Create request record
         $spvRequest = SpvRequest::create([
             'user_id' => auth()->id(),
             'cif' => $request->cif,
-            'cui' => $message ? ($message->cui ?? $request->cif) : $request->cif,
+            'cui' => $company ? $company->cui : (($message ?? null) ? ($message->cui ?? $request->cif) : $request->cif),
             'document_type' => $request->document_type,
             'tip' => $request->document_type,
             'company_name' => $companyName,
