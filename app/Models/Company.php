@@ -37,6 +37,14 @@ class Company extends Eloquent
         'punct_de_lucru',
         'activitate',
         'synced_at',
+        
+        // Processing status
+        'status', // pending_data, processing, active, data_not_found, failed, approved
+        'approved_at',
+        'approved_by',
+        'locked', // true/false - prevents processing and modifications
+        'locked_at',
+        'locked_by',
 
         // Lista Firme API specific fields
         'data_source',
@@ -57,6 +65,12 @@ class Company extends Eloquent
         'form_of_ownership',
         'organizational_form',
         'legal_form',
+
+        // VIES API specific fields
+        'country_code',
+        'vat_number',
+        'vat_valid',
+        'vies_request_date',
     ];
 
     protected $casts = [
@@ -65,6 +79,8 @@ class Company extends Eloquent
         'data_inregistrare' => 'date',
         'registration_date' => 'date',
         'synced_at' => 'datetime',
+        'approved_at' => 'datetime',
+        'locked_at' => 'datetime',
 
         // Boolean fields
         'statusRO_e_Factura' => 'boolean',
@@ -72,6 +88,8 @@ class Company extends Eloquent
         'forma_organizare' => 'boolean',
         'forma_juridica' => 'boolean',
         'ro_invoice_status' => 'boolean',
+        'locked' => 'boolean',
+        'vat_valid' => 'boolean',
 
         // Array/JSON fields
         'adresa_sediu_social' => 'array',

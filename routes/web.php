@@ -40,6 +40,19 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('firme/mass-action', [\App\Http\Controllers\FirmeController::class, 'massAction'])
         ->name('firme.mass-action');
 
+    Route::get('firme/status', [\App\Http\Controllers\FirmeController::class, 'getStatus'])
+        ->name('firme.status');
+
+    Route::post('firme/process-next', [\App\Http\Controllers\FirmeController::class, 'processNext'])
+        ->name('firme.process-next');
+
+    Route::post('firme/lock', [\App\Http\Controllers\FirmeController::class, 'lock'])
+        ->name('firme.lock');
+
+    Route::post('firme/unlock', [\App\Http\Controllers\FirmeController::class, 'unlock'])
+        ->name('firme.unlock');
+
+
     // ANAF routes removed - authentication handled directly in SPV
 });
 
@@ -84,6 +97,24 @@ Route::get('/anaf/cookie-helper', function () {
 // Extension API endpoint (needs to be outside middleware)
 Route::post('/api/anaf/extension-cookies', [AnafBrowserSessionController::class, 'receiveExtensionCookies'])
     ->name('anaf.extension.cookies');
+
+// Test VIES API (temporary route for testing)
+Route::get('/test-vies/{cui?}', function ($cui = '23681054') {
+    $service = new \App\Services\AnafCompanyService();
+    
+    // Use reflection to test the private method
+    $reflection = new ReflectionClass($service);
+    $method = $reflection->getMethod('fetchCompanyFromVIES');
+    $method->setAccessible(true);
+    
+    $result = $method->invoke($service, $cui);
+    
+    return response()->json([
+        'cui' => $cui,
+        'vies_result' => $result,
+        'success' => !empty($result),
+    ]);
+})->name('test.vies');
 
 require __DIR__.'/settings.php';
 require __DIR__.'/auth.php';

@@ -24,47 +24,30 @@ class FirmeController extends Controller
         $perPage = 15;
         $page = $request->get('page', 1);
 
-        // Get filtered pending/processing items
-        $allQueue = CompanyQueue::whereIn('status', ['pending', 'processing'])
-            ->orderBy('created_at')
-            ->get();
+        // Get all companies - order by created_at ASC so first (top) entries are processed first
+        $companies = Company::orderBy('created_at', 'asc')->get();
 
         // Filter to only show CUIs with 6-9 digits (valid CUI length)
-        $filteredQueue = $allQueue->filter(function ($item) {
+        $filteredCompanies = $companies->filter(function ($item) {
             return strlen($item->cui) >= 6 &&
                    strlen($item->cui) <= 9 &&
                    preg_match('/^[0-9]+$/', $item->cui);
-        })->values(); // Reset array keys
+        })->values();
 
-        // Get approved companies
-        $companies = Company::orderBy('denumire')->get();
-
-        // Combine pending companies first, then regular companies
+        // Build items list
         $allItems = collect();
 
-        // Add pending/processing items first (with type marker)
-        foreach ($filteredQueue as $queueItem) {
-            $allItems->push([
-                'id' => $queueItem->_id,
-                'cui' => $queueItem->cui,
-                'denumire' => $queueItem->company_name ?? 'În procesare...',
-                'status' => $queueItem->status,
-                'type' => 'pending',
-                'created_at' => $queueItem->created_at,
-                'updated_at' => $queueItem->updated_at,
-            ]);
-        }
-
-        // Add approved companies
-        foreach ($companies as $company) {
+        foreach ($filteredCompanies as $company) {
             $allItems->push([
                 'id' => $company->_id,
                 'cui' => $company->cui,
-                'denumire' => $company->denumire,
-                'status' => 'approved',
+                'denumire' => $company->denumire ?? 'Se încarcă...',
+                'status' => $company->status ?? 'active',
                 'type' => 'company',
                 'created_at' => $company->created_at,
                 'updated_at' => $company->updated_at,
+                'synced_at' => $company->synced_at,
+                'locked' => $company->locked ?? false,
             ]);
         }
 
@@ -86,15 +69,12 @@ class FirmeController extends Controller
 
         // Calculate stats
         $stats = [
-            'total_companies' => $companies->count(),
-            'pending_queue' => $filteredQueue->where('status', 'pending')->count(),
-            'processing_queue' => $filteredQueue->where('status', 'processing')->count(),
-            'approved_today' => CompanyQueue::where('status', 'approved')
-                ->whereDate('updated_at', Carbon::today())
-                ->count(),
-            'rejected_today' => CompanyQueue::where('status', 'rejected')
-                ->whereDate('updated_at', Carbon::today())
-                ->count(),
+            'total_companies' => $filteredCompanies->count(),
+            'pending_data' => $filteredCompanies->where('status', 'pending_data')->count(),
+            'processing' => $filteredCompanies->where('status', 'processing')->count(),
+            'active' => $filteredCompanies->where('status', 'active')->count(),
+            'data_not_found' => $filteredCompanies->where('status', 'data_not_found')->count(),
+            'failed' => $filteredCompanies->where('status', 'failed')->count(),
         ];
 
         return Inertia::render('firme/Index', [
@@ -146,29 +126,28 @@ class FirmeController extends Controller
 
         try {
             $itemId = $request->input('item_id');
-            $item = CompanyQueue::find($itemId);
+            $company = Company::find($itemId);
 
-            if (! $item) {
-                return redirect()->back()->with('error', 'Element nu a fost găsit în coadă.');
+            if (! $company) {
+                return redirect()->back()->with('error', 'Compania nu a fost găsită.');
             }
 
-            $success = $this->companyService->approveCompany($item->cui);
+            // Approve means keeping the company and marking it as approved
+            $company->update([
+                'status' => 'approved',
+                'approved_at' => now(),
+                'approved_by' => Auth::id(),
+            ]);
 
-            if ($success) {
-                Log::info('Company approved and added', [
-                    'cui' => $item->cui,
-                    'item_id' => $itemId,
-                    'user_id' => Auth::id(),
-                ]);
+            Log::info('Company approved', [
+                'cui' => $company->cui,
+                'item_id' => $itemId,
+                'user_id' => Auth::id(),
+            ]);
 
-                return redirect()->back()->with('success',
-                    "Compania cu CUI {$item->cui} a fost aprobată și adăugată."
-                );
-            } else {
-                return redirect()->back()->with('error',
-                    'Nu s-a putut aproba compania - datele lipsesc sau sunt incomplete.'
-                );
-            }
+            return redirect()->back()->with('success',
+                "Compania cu CUI {$company->cui} a fost aprobată."
+            );
         } catch (\Exception $e) {
             Log::error('Failed to approve company', [
                 'item_id' => $request->input('item_id'),
@@ -190,27 +169,28 @@ class FirmeController extends Controller
 
         try {
             $itemId = $request->input('item_id');
-            $item = CompanyQueue::find($itemId);
+            $company = Company::find($itemId);
 
-            if (! $item) {
-                return redirect()->back()->with('error', 'Element nu a fost găsit în coadă.');
+            if (! $company) {
+                return redirect()->back()->with('error', 'Compania nu a fost găsită.');
             }
 
-            $success = $this->companyService->rejectCompany($item->cui);
+            $cui = $company->cui;
+            $success = $this->companyService->rejectCompany($cui);
 
             if ($success) {
-                Log::info('Company rejected', [
-                    'cui' => $item->cui,
+                Log::info('Company rejected and deleted', [
+                    'cui' => $cui,
                     'item_id' => $itemId,
                     'user_id' => Auth::id(),
                 ]);
 
                 return redirect()->back()->with('success',
-                    "Compania cu CUI {$item->cui} a fost respinsă."
+                    "Compania cu CUI {$cui} a fost respinsă și ștearsă."
                 );
             } else {
                 return redirect()->back()->with('error',
-                    'Nu s-a putut respinge compania - elementul nu a fost găsit.'
+                    'Nu s-a putut respinge compania.'
                 );
             }
         } catch (\Exception $e) {
@@ -274,6 +254,174 @@ class FirmeController extends Controller
 
             return redirect()->back()->with('error',
                 'Eroare la acțiunea în masă: '.$e->getMessage()
+            );
+        }
+    }
+
+    public function getStatus(Request $request)
+    {
+        $perPage = 15;
+        $page = $request->get('page', 1);
+
+        // Get all companies - order by created_at ASC so first (top) entries are processed first
+        $companies = Company::orderBy('created_at', 'asc')->get();
+
+        // Filter to only show CUIs with 6-9 digits (valid CUI length)
+        $filteredCompanies = $companies->filter(function ($item) {
+            return strlen($item->cui) >= 6 &&
+                   strlen($item->cui) <= 9 &&
+                   preg_match('/^[0-9]+$/', $item->cui);
+        })->values();
+
+        // Build items list
+        $allItems = collect();
+
+        foreach ($filteredCompanies as $company) {
+            $allItems->push([
+                'id' => $company->_id,
+                'cui' => $company->cui,
+                'denumire' => $company->denumire ?? 'Se încarcă...',
+                'status' => $company->status ?? 'active',
+                'type' => 'company',
+                'created_at' => $company->created_at,
+                'updated_at' => $company->updated_at,
+                'synced_at' => $company->synced_at,
+                'locked' => $company->locked ?? false,
+            ]);
+        }
+
+        // Manual pagination
+        $total = $allItems->count();
+        $lastPage = ceil($total / $perPage);
+        $currentPage = min($page, $lastPage ?: 1);
+        $offset = ($currentPage - 1) * $perPage;
+
+        $paginatedItems = $allItems->slice($offset, $perPage)->values();
+
+        $paginationData = [
+            'data' => $paginatedItems,
+            'current_page' => $currentPage,
+            'last_page' => $lastPage,
+            'per_page' => $perPage,
+            'total' => $total,
+        ];
+
+        // Calculate stats
+        $stats = [
+            'total_companies' => $filteredCompanies->count(),
+            'pending_data' => $filteredCompanies->where('status', 'pending_data')->count(),
+            'processing' => $filteredCompanies->where('status', 'processing')->count(),
+            'active' => $filteredCompanies->where('status', 'active')->count(),
+            'data_not_found' => $filteredCompanies->where('status', 'data_not_found')->count(),
+            'failed' => $filteredCompanies->where('status', 'failed')->count(),
+        ];
+
+        return response()->json([
+            'companies' => $paginationData,
+            'stats' => $stats,
+        ]);
+    }
+
+    public function processNext(Request $request)
+    {
+        try {
+            $result = $this->companyService->processNextPendingCompany();
+            
+            return response()->json($result);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to process next company', [
+                'error' => $e->getMessage(),
+                'user_id' => Auth::id(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to process next company: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function lock(Request $request): RedirectResponse
+    {
+        $request->validate([
+            'item_id' => 'required|string',
+        ]);
+
+        try {
+            $itemId = $request->input('item_id');
+            $company = Company::find($itemId);
+
+            if (! $company) {
+                return redirect()->back()->with('error', 'Compania nu a fost găsită.');
+            }
+
+            $company->update([
+                'locked' => true,
+                'locked_at' => now(),
+                'locked_by' => Auth::id(),
+            ]);
+
+            Log::info('Company locked', [
+                'cui' => $company->cui,
+                'item_id' => $itemId,
+                'user_id' => Auth::id(),
+            ]);
+
+            return redirect()->back()->with('success',
+                "Compania cu CUI {$company->cui} a fost blocată."
+            );
+        } catch (\Exception $e) {
+            Log::error('Failed to lock company', [
+                'item_id' => $request->input('item_id'),
+                'error' => $e->getMessage(),
+                'user_id' => Auth::id(),
+            ]);
+
+            return redirect()->back()->with('error',
+                'Eroare la blocarea companiei: '.$e->getMessage()
+            );
+        }
+    }
+
+    public function unlock(Request $request): RedirectResponse
+    {
+        $request->validate([
+            'item_id' => 'required|string',
+        ]);
+
+        try {
+            $itemId = $request->input('item_id');
+            $company = Company::find($itemId);
+
+            if (! $company) {
+                return redirect()->back()->with('error', 'Compania nu a fost găsită.');
+            }
+
+            $company->update([
+                'locked' => false,
+                'locked_at' => null,
+                'locked_by' => null,
+            ]);
+
+            Log::info('Company unlocked', [
+                'cui' => $company->cui,
+                'item_id' => $itemId,
+                'user_id' => Auth::id(),
+            ]);
+
+            return redirect()->back()->with('success',
+                "Compania cu CUI {$company->cui} a fost deblocată."
+            );
+        } catch (\Exception $e) {
+            Log::error('Failed to unlock company', [
+                'item_id' => $request->input('item_id'),
+                'error' => $e->getMessage(),
+                'user_id' => Auth::id(),
+            ]);
+
+            return redirect()->back()->with('error',
+                'Eroare la deblocarea companiei: '.$e->getMessage()
             );
         }
     }
