@@ -65,10 +65,16 @@ export default function FirmeIndex() {
 
     // Get only items that need review (all items can be approved/rejected)
     const pendingItems = companies.data;
+    
+    // Check if there are companies that need processing (not approved)
+    const hasPendingCompanies = companies.data.some(item => 
+        item.status !== 'approved' && 
+        (item.status === 'pending_data' || item.status === 'processing' || !item.denumire || item.denumire === 'Se încarcă...')
+    );
 
-    // Auto-refresh and processing functionality
+    // Auto-refresh and processing functionality - only when there are pending companies
     useEffect(() => {
-        if (!autoRefresh) return;
+        if (!autoRefresh || !hasPendingCompanies) return;
 
         const statusInterval = setInterval(async () => {
             try {
@@ -108,7 +114,7 @@ export default function FirmeIndex() {
             clearInterval(statusInterval);
             clearInterval(processInterval);
         };
-    }, [autoRefresh]);
+    }, [autoRefresh, hasPendingCompanies]);
 
     const handleSelectAll = (checked: boolean) => {
         if (checked) {
@@ -362,23 +368,17 @@ export default function FirmeIndex() {
                                     variant="outline"
                                     size="sm"
                                     onClick={() => setAutoRefresh(!autoRefresh)}
-                                    className={autoRefresh ? "border-green-500 text-green-600" : ""}
+                                    className={autoRefresh && hasPendingCompanies ? "border-green-500 text-green-600" : 
+                                              !hasPendingCompanies ? "border-gray-300 text-gray-400" : ""}
+                                    disabled={!hasPendingCompanies}
                                 >
-                                    {autoRefresh ? (
+                                    {autoRefresh && hasPendingCompanies ? (
                                         <Pause className="h-4 w-4 mr-1" />
                                     ) : (
                                         <Play className="h-4 w-4 mr-1" />
                                     )}
-                                    {autoRefresh ? 'Oprește' : 'Pornește'} Auto-Refresh
-                                </Button>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => router.reload()}
-                                    className="flex items-center gap-1"
-                                >
-                                    <RefreshCw className="h-4 w-4" />
-                                    Reîncarcă
+                                    {!hasPendingCompanies ? 'Auto-Refresh (Inactiv)' : 
+                                     autoRefresh ? 'Oprește Auto-Refresh' : 'Pornește Auto-Refresh'}
                                 </Button>
                             </div>
                         </div>
@@ -448,33 +448,56 @@ export default function FirmeIndex() {
                                                 <TableCell className="py-1 text-sm" style={{ width: '96px' }}>{new Date(item.created_at).toLocaleDateString('ro-RO')}</TableCell>
                                                 <TableCell className="py-1" style={{ width: '224px' }}>
                                                     <div className="flex gap-1">
-                                                        <Button
-                                                            size="sm"
-                                                            onClick={() => handleApprove(item.id)}
-                                                            disabled={processingItems.has(item.id) || item.status === 'approved' || item.locked}
-                                                            className="bg-green-600 hover:bg-green-700 h-6 px-2 text-xs"
-                                                        >
-                                                            {processingItems.has(item.id) ? (
-                                                                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                                                            ) : (
-                                                                <CheckCircle2 className="h-3 w-3 mr-1" />
-                                                            )}
-                                                            Acceptă
-                                                        </Button>
-                                                        <Button
-                                                            size="sm"
-                                                            variant="destructive"
-                                                            onClick={() => handleReject(item.id)}
-                                                            disabled={processingItems.has(item.id) || item.status === 'approved' || item.locked}
-                                                            className="h-6 px-2 text-xs"
-                                                        >
-                                                            {processingItems.has(item.id) ? (
-                                                                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                                                            ) : (
-                                                                <XCircle className="h-3 w-3 mr-1" />
-                                                            )}
-                                                            Respinge
-                                                        </Button>
+                                                        {/* Accept/Reject buttons - only show if not approved */}
+                                                        {item.status !== 'approved' && (
+                                                            <>
+                                                                <Button
+                                                                    size="sm"
+                                                                    onClick={() => handleApprove(item.id)}
+                                                                    disabled={processingItems.has(item.id) || item.locked}
+                                                                    className="bg-green-600 hover:bg-green-700 h-6 px-2 text-xs"
+                                                                >
+                                                                    {processingItems.has(item.id) ? (
+                                                                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                                                    ) : (
+                                                                        <CheckCircle2 className="h-3 w-3 mr-1" />
+                                                                    )}
+                                                                    Acceptă
+                                                                </Button>
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="destructive"
+                                                                    onClick={() => handleReject(item.id)}
+                                                                    disabled={processingItems.has(item.id) || item.locked}
+                                                                    className="h-6 px-2 text-xs"
+                                                                >
+                                                                    {processingItems.has(item.id) ? (
+                                                                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                                                    ) : (
+                                                                        <XCircle className="h-3 w-3 mr-1" />
+                                                                    )}
+                                                                    Respinge
+                                                                </Button>
+                                                            </>
+                                                        )}
+                                                        
+                                                        {/* Verifica button - always show for approved companies, or non-approved with data */}
+                                                        {(item.status === 'approved' || item.denumire !== 'Se încarcă...') && (
+                                                            <Button
+                                                                size="sm"
+                                                                variant="secondary"
+                                                                onClick={() => {
+                                                                    // Trigger re-verification of company data
+                                                                    router.post('/firme/verify', { item_id: item.id });
+                                                                }}
+                                                                className="h-6 px-2 text-xs"
+                                                            >
+                                                                <RefreshCw className="h-3 w-3 mr-1" />
+                                                                Verifică
+                                                            </Button>
+                                                        )}
+                                                        
+                                                        {/* Lock/Unlock button */}
                                                         <Button
                                                             size="sm"
                                                             variant="outline"

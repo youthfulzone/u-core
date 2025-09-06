@@ -637,4 +637,150 @@ class AnafCompanyService
             ];
         }
     }
+
+    public function processSpecificCompany(string $cui): array
+    {
+        try {
+            $company = Company::where('cui', $cui)->first();
+
+            if (!$company) {
+                return [
+                    'success' => false,
+                    'message' => 'Company not found with CUI: ' . $cui
+                ];
+            }
+
+            // Store original approval status before processing
+            $wasApproved = $company->status === 'approved';
+            $approvalData = [];
+            if ($wasApproved) {
+                $approvalData = [
+                    'approved_at' => $company->approved_at,
+                    'approved_by' => $company->approved_by,
+                ];
+            }
+
+            // Set status to processing to prevent other processes from picking it up
+            $company->update(['status' => 'processing']);
+
+            // Use the same logic as processNextPendingCompany but for this specific company
+            Log::info('🔄 Processing specific company', ['cui' => $cui, 'was_approved' => $wasApproved]);
+
+            // First try Lista Firme API
+            $companyData = $this->fetchCompanyFromListaFirme($company->cui);
+            
+            // If Lista Firme fails, try VIES as fallback
+            if (!$companyData || empty($companyData['name'])) {
+                Log::info('Lista Firme failed, trying VIES fallback', ['cui' => $company->cui]);
+                
+                $viesData = $this->fetchCompanyFromVIES($company->cui);
+                if ($viesData && !empty($viesData['name'])) {
+                    $companyData = $viesData;
+                    Log::info('✅ VIES fallback successful', [
+                        'cui' => $company->cui,
+                        'company_name' => $viesData['name']
+                    ]);
+                }
+            }
+            
+            if ($companyData && !empty($companyData['name'])) {
+                // Prepare update data based on the source
+                // Preserve approval status if it was previously approved
+                $newStatus = $wasApproved ? 'approved' : 'active';
+                
+                $updateData = [
+                    'denumire' => $companyData['name'],
+                    'adresa' => $this->buildAddressFromAlternative($companyData),
+                    'data_source' => $companyData['data_source'] ?? 'Lista-firme.info',
+                    'synced_at' => now(),
+                    'status' => $newStatus,
+                ];
+
+                // Restore approval data if it was previously approved
+                if ($wasApproved) {
+                    $updateData = array_merge($updateData, $approvalData);
+                }
+
+                // Add source-specific fields
+                if (!empty($companyData['data_source']) && $companyData['data_source'] === 'VIES-EU') {
+                    // VIES-specific fields
+                    $updateData = array_merge($updateData, [
+                        'country_code' => $companyData['country_code'] ?? 'RO',
+                        'vat_number' => $companyData['vat_number'] ?? null,
+                        'vat_valid' => $companyData['valid'] ?? false,
+                        'vies_request_date' => $companyData['request_date'] ?? null,
+                    ]);
+                } else {
+                    // Lista Firme specific fields
+                    $updateData = array_merge($updateData, [
+                        'euid' => $companyData['id'] ?? null,
+                        'registration_date' => $companyData['date'] ?? null,
+                        'company_type' => $companyData['type'] ?? null,
+                        'address_details' => $companyData['address'] ?? null,
+                        'status_details' => $companyData['status'] ?? null,
+                        'caen_codes' => $companyData['caen'] ?? [],
+                        'full_address_info' => $companyData['info'] ?? null,
+                        'registration_status' => $companyData['info']['registrationStatus'] ?? null,
+                        'activity_code' => $companyData['info']['activityCode'] ?? null,
+                        'bank_account' => $companyData['info']['bankAccount'] ?? null,
+                        'ro_invoice_status' => $companyData['info']['roInvoiceStatus'] ?? null,
+                        'authority_name' => $companyData['info']['authorityName'] ?? null,
+                        'form_of_ownership' => $companyData['info']['formOfOwnership'] ?? null,
+                        'organizational_form' => $companyData['info']['organizationalForm'] ?? null,
+                        'legal_form' => $companyData['info']['legalForm'] ?? null,
+                    ]);
+                }
+
+                // Update company with fetched data
+                $company->update($updateData);
+                
+                Log::info('✅ Company verification successful', [
+                    'cui' => $company->cui,
+                    'company_name' => $companyData['name']
+                ]);
+
+                return [
+                    'success' => true,
+                    'message' => 'Company verification successful',
+                    'cui' => $company->cui,
+                    'company_name' => $company->denumire
+                ];
+            } else {
+                // No valid data found, mark as data_not_found
+                $company->update([
+                    'denumire' => 'Date indisponibile',
+                    'status' => 'data_not_found',
+                    'synced_at' => now(),
+                ]);
+                
+                Log::warning('⚠️ No valid data found for company verification', ['cui' => $company->cui]);
+
+                return [
+                    'success' => false,
+                    'message' => 'No data found for company',
+                    'cui' => $company->cui
+                ];
+            }
+
+        } catch (\Exception $e) {
+            // Update status to failed if there's an error
+            if (isset($company)) {
+                $company->update([
+                    'status' => 'failed',
+                    'denumire' => 'Eroare în procesare'
+                ]);
+            }
+            
+            Log::error('❌ Failed to verify company', [
+                'cui' => $cui,
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Failed to verify company: ' . $e->getMessage(),
+                'cui' => $cui
+            ];
+        }
+    }
 }

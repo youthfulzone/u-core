@@ -52,6 +52,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('firme/unlock', [\App\Http\Controllers\FirmeController::class, 'unlock'])
         ->name('firme.unlock');
 
+    Route::post('firme/verify', [\App\Http\Controllers\FirmeController::class, 'verifyCompany'])
+        ->name('firme.verify');
 
     // ANAF routes removed - authentication handled directly in SPV
 });

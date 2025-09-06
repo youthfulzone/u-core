@@ -342,6 +342,59 @@ class FirmeController extends Controller
         }
     }
 
+    public function verifyCompany(Request $request): RedirectResponse
+    {
+        $request->validate([
+            'item_id' => 'required|string',
+        ]);
+
+        try {
+            $itemId = $request->input('item_id');
+            $company = Company::find($itemId);
+
+            if (! $company) {
+                return redirect()->back()->with('error', 'Compania nu a fost găsită.');
+            }
+
+            // Re-fetch company data without changing approval status
+            // Only reset synced_at to trigger data refresh
+            $company->update([
+                'synced_at' => null,
+            ]);
+
+            // Process this specific company
+            $result = $this->companyService->processSpecificCompany($company->cui);
+
+            Log::info('Company verification requested', [
+                'cui' => $company->cui,
+                'item_id' => $itemId,
+                'result' => $result,
+                'user_id' => Auth::id(),
+            ]);
+
+            if ($result['success'] ?? false) {
+                return redirect()->back()->with('success', 
+                    "Compania cu CUI {$company->cui} a fost verificată cu succes."
+                );
+            } else {
+                return redirect()->back()->with('error', 
+                    'Nu s-au putut obține informații actualizate pentru această companie.'
+                );
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Failed to verify company', [
+                'item_id' => $request->input('item_id'),
+                'error' => $e->getMessage(),
+                'user_id' => Auth::id(),
+            ]);
+
+            return redirect()->back()->with('error', 
+                'Eroare la verificarea companiei: ' . $e->getMessage()
+            );
+        }
+    }
+
     public function lock(Request $request): RedirectResponse
     {
         $request->validate([
