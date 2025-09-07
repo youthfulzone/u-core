@@ -17,6 +17,10 @@ class AnafCompanyService
 
     private const RATE_LIMIT_SECONDS = 2;
 
+    public function __construct(
+        private TargetareApiService $targetareService
+    ) {}
+
     public function queueCuisFromMessage(array $cuis): int
     {
         $queuedCount = 0;
@@ -687,10 +691,16 @@ class AnafCompanyService
             // Use the same logic as processNextPendingCompany but for this specific company
             Log::info('🔄 Processing specific company', ['cui' => $cui, 'was_approved' => $wasApproved]);
 
-            // First try Lista Firme API
-            $companyData = $this->fetchCompanyFromListaFirme($company->cui);
+            // First try Targetare API (primary source)
+            $companyData = $this->fetchCompanyFromTargetare($company->cui);
             
-            // If Lista Firme fails, try VIES as fallback
+            // If Targetare fails, try Lista Firme API
+            if (!$companyData || empty($companyData['name'])) {
+                Log::info('Targetare failed, trying Lista Firme fallback', ['cui' => $company->cui]);
+                $companyData = $this->fetchCompanyFromListaFirme($company->cui);
+            }
+            
+            // If both Targetare and Lista Firme fail, try VIES as final fallback
             if (!$companyData || empty($companyData['name'])) {
                 Log::info('Lista Firme failed, trying VIES fallback', ['cui' => $company->cui]);
                 
@@ -723,7 +733,35 @@ class AnafCompanyService
                 }
 
                 // Add source-specific fields
-                if (!empty($companyData['data_source']) && $companyData['data_source'] === 'VIES-EU') {
+                if (!empty($companyData['data_source']) && $companyData['data_source'] === 'Targetare API') {
+                    // Targetare-specific fields
+                    $updateData = array_merge($updateData, [
+                        'source_api' => 'targetare',
+                        'tax_category' => $companyData['tax_category'] ?? null,
+                        'company_status' => $companyData['company_status'] ?? null,
+                        'county' => $companyData['county'] ?? null,
+                        'locality' => $companyData['locality'] ?? null,
+                        'street_nr' => $companyData['street_nr'] ?? null,
+                        'street_name' => $companyData['street_name'] ?? null,
+                        'postal_code' => $companyData['postal_code'] ?? null,
+                        'full_address' => $companyData['full_address'] ?? null,
+                        'company_id' => $companyData['company_id'] ?? null,
+                        'founding_year' => $companyData['founding_year'] ?? null,
+                        'split_vat' => $companyData['split_vat'] ?? null,
+                        'checkout_vat' => $companyData['checkout_vat'] ?? null,
+                        'vat' => $companyData['vat'] ?? null,
+                        'caen_activities' => $companyData['caen_activities'] ?? [],
+                        'company_type_targetare' => $companyData['company_type_targetare'] ?? null,
+                        'has_email' => $companyData['has_email'] ?? null,
+                        'has_phone' => $companyData['has_phone'] ?? null,
+                        'has_verified_phone' => $companyData['has_verified_phone'] ?? null,
+                        'has_administrator' => $companyData['has_administrator'] ?? null,
+                        'has_website' => $companyData['has_website'] ?? null,
+                        'has_fin_data' => $companyData['has_fin_data'] ?? null,
+                        'employees_current' => $companyData['employees_current'] ?? null,
+                        'targetare_synced_at' => $companyData['targetare_synced_at'] ?? null,
+                    ]);
+                } elseif (!empty($companyData['data_source']) && $companyData['data_source'] === 'VIES-EU') {
                     // VIES-specific fields
                     $updateData = array_merge($updateData, [
                         'source_api' => 'vies',
@@ -804,5 +842,110 @@ class AnafCompanyService
                 'cui' => $cui
             ];
         }
+    }
+
+    /**
+     * Fetch company data from Targetare API and format it
+     */
+    private function fetchCompanyFromTargetare(string $cui): ?array
+    {
+        try {
+            // Use combined method to avoid duplicate API calls
+            $result = $this->targetareService->getCompanyWithFinancialData($cui);
+            
+            if (!$result['success'] || !$result['company_data']) {
+                Log::info('Targetare API failed for CUI', [
+                    'cui' => $cui,
+                    'error' => $result['error'] ?? 'No data returned'
+                ]);
+                return null;
+            }
+
+            $data = $result['company_data'];
+            $financialData = $result['financial_data'];
+
+            Log::info('✅ Targetare API successful', [
+                'cui' => $cui,
+                'company_name' => $data['companyName'] ?? 'N/A',
+                'remaining_requests' => $result['remaining_requests'] ?? null
+            ]);
+
+            // Map Targetare data to our standard format
+            return [
+                'name' => $data['companyName'] ?? '',
+                'address' => $this->buildAddressFromTargetare($data),
+                'data_source' => 'Targetare API',
+                'source_api' => 'targetare',
+                
+                // Targetare specific data
+                'tax_category' => $data['taxCategory'] ?? null,
+                'company_status' => $data['status'] ?? null,
+                'county' => $data['county'] ?? null,
+                'locality' => $data['locality'] ?? null,
+                'street_nr' => $data['streetNr'] ?? null,
+                'street_name' => $data['streetName'] ?? null,
+                'postal_code' => $data['postalCode'] ?? null,
+                'full_address' => $data['fullAddress'] ?? null,
+                'company_id' => $data['companyId'] ?? null,
+                'founding_year' => $data['foundingYear'] ?? null,
+                'split_vat' => $data['splitVAT'] ?? null,
+                'checkout_vat' => $data['checkoutVAT'] ?? null,
+                'vat' => $data['VAT'] ?? null,
+                'caen_activities' => $data['caen'] ?? [],
+                'company_type_targetare' => $data['companyType'] ?? null,
+                'has_email' => $data['hasEmail'] ?? null,
+                'has_phone' => $data['hasPhone'] ?? null,
+                'has_verified_phone' => $data['hasVerifiedPhone'] ?? null,
+                'has_administrator' => $data['hasAdministrator'] ?? null,
+                'has_website' => $data['hasWebsite'] ?? null,
+                'has_fin_data' => $data['hasFinData'] ?? null,
+                
+                // Employee count from financial data
+                'employees_current' => $financialData['employee'] ?? null,
+                'targetare_synced_at' => now(),
+            ];
+
+        } catch (\Exception $e) {
+            Log::error('Targetare API error', [
+                'cui' => $cui,
+                'error' => $e->getMessage()
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Build address string from Targetare data
+     */
+    private function buildAddressFromTargetare(array $data): string
+    {
+        $addressParts = [];
+        
+        if (!empty($data['fullAddress'])) {
+            return $data['fullAddress'];
+        }
+        
+        // Build address from components
+        if (!empty($data['streetName'])) {
+            $street = $data['streetName'];
+            if (!empty($data['streetNr'])) {
+                $street .= ', Nr.' . $data['streetNr'];
+            }
+            $addressParts[] = $street;
+        }
+        
+        if (!empty($data['locality'])) {
+            $addressParts[] = $data['locality'];
+        }
+        
+        if (!empty($data['county'])) {
+            $addressParts[] = 'Jud. ' . $data['county'];
+        }
+        
+        if (!empty($data['postalCode'])) {
+            $addressParts[] = 'CP ' . $data['postalCode'];
+        }
+        
+        return implode(', ', $addressParts) ?: 'Adresă necunoscută';
     }
 }

@@ -24,14 +24,23 @@ class FirmeController extends Controller
         $perPage = 15;
         $page = $request->get('page', 1);
 
-        // Get all companies - order by created_at ASC so first (top) entries are processed first
-        $companies = Company::orderBy('created_at', 'asc')->get();
+        // Get all companies
+        $companies = Company::all();
 
-        // Filter to only show CUIs with 6-9 digits (valid CUI length)
+        // Filter to only show CUIs with 6-9 digits (valid CUI length) and sort alphabetically by company name
         $filteredCompanies = $companies->filter(function ($item) {
             return strlen($item->cui) >= 6 &&
                    strlen($item->cui) <= 9 &&
                    preg_match('/^[0-9]+$/', $item->cui);
+        })->sortBy(function ($item) {
+            // Sort alphabetically by company name (denumire)
+            // Handle cases where denumire might be null or "Se încarcă..."
+            $name = $item->denumire ?? '';
+            if ($name === 'Se încarcă...' || $name === '') {
+                // Put companies without names at the end
+                return 'zzz_' . $item->cui;
+            }
+            return strtolower($name);
         })->values();
 
         // Build items list
@@ -49,6 +58,12 @@ class FirmeController extends Controller
                 'synced_at' => $company->synced_at,
                 'locked' => $company->locked ?? false,
                 'source_api' => $company->source_api ?? null,
+                'tax_category' => $company->tax_category ?? null,
+                'employees_current' => $company->employees_current ?? null,
+                'vat' => $company->vat ?? $company->vat_valid ?? false,
+                'split_vat' => $company->split_vat ?? false,
+                'checkout_vat' => $company->checkout_vat ?? false,
+                'manual_added' => $company->manual_added ?? false,
             ]);
         }
 
@@ -264,14 +279,23 @@ class FirmeController extends Controller
         $perPage = 15;
         $page = $request->get('page', 1);
 
-        // Get all companies - order by created_at ASC so first (top) entries are processed first
-        $companies = Company::orderBy('created_at', 'asc')->get();
+        // Get all companies
+        $companies = Company::all();
 
-        // Filter to only show CUIs with 6-9 digits (valid CUI length)
+        // Filter to only show CUIs with 6-9 digits (valid CUI length) and sort alphabetically by company name
         $filteredCompanies = $companies->filter(function ($item) {
             return strlen($item->cui) >= 6 &&
                    strlen($item->cui) <= 9 &&
                    preg_match('/^[0-9]+$/', $item->cui);
+        })->sortBy(function ($item) {
+            // Sort alphabetically by company name (denumire)
+            // Handle cases where denumire might be null or "Se încarcă..."
+            $name = $item->denumire ?? '';
+            if ($name === 'Se încarcă...' || $name === '') {
+                // Put companies without names at the end
+                return 'zzz_' . $item->cui;
+            }
+            return strtolower($name);
         })->values();
 
         // Build items list
@@ -289,6 +313,12 @@ class FirmeController extends Controller
                 'synced_at' => $company->synced_at,
                 'locked' => $company->locked ?? false,
                 'source_api' => $company->source_api ?? null,
+                'tax_category' => $company->tax_category ?? null,
+                'employees_current' => $company->employees_current ?? null,
+                'vat' => $company->vat ?? $company->vat_valid ?? false,
+                'split_vat' => $company->split_vat ?? false,
+                'checkout_vat' => $company->checkout_vat ?? false,
+                'manual_added' => $company->manual_added ?? false,
             ]);
         }
 
@@ -477,6 +507,108 @@ class FirmeController extends Controller
 
             return redirect()->back()->with('error',
                 'Eroare la deblocarea companiei: '.$e->getMessage()
+            );
+        }
+    }
+
+    public function addCompany(Request $request): RedirectResponse
+    {
+        $request->validate([
+            'cui' => 'required|string|min:6|max:9|regex:/^[0-9]+$/',
+        ]);
+
+        try {
+            $cui = $request->input('cui');
+            
+            // Check if company already exists
+            $existingCompany = Company::where('cui', $cui)->first();
+            if ($existingCompany) {
+                return redirect()->back()->with('error', 
+                    "Compania cu CUI {$cui} există deja în sistem."
+                );
+            }
+
+            // Create new company with manual_added flag and auto-approve it
+            $company = Company::create([
+                'cui' => $cui,
+                'denumire' => 'Se încarcă...',
+                'status' => 'approved',
+                'manual_added' => true,
+                'added_by' => Auth::id(),
+                'approved_at' => now(),
+                'approved_by' => Auth::id(),
+                'synced_at' => null,
+            ]);
+
+            Log::info('Company manually added', [
+                'cui' => $cui,
+                'company_id' => $company->_id,
+                'user_id' => Auth::id(),
+            ]);
+
+            // Process the company immediately to fetch data
+            $this->companyService->processSpecificCompany($cui);
+
+            return redirect()->back()->with('success',
+                "Compania cu CUI {$cui} a fost adăugată și se procesează."
+            );
+
+        } catch (\Exception $e) {
+            Log::error('Failed to add company manually', [
+                'cui' => $request->input('cui'),
+                'error' => $e->getMessage(),
+                'user_id' => Auth::id(),
+            ]);
+
+            return redirect()->back()->with('error',
+                'Eroare la adăugarea companiei: '.$e->getMessage()
+            );
+        }
+    }
+
+    public function deleteCompany(Request $request): RedirectResponse
+    {
+        $request->validate([
+            'item_id' => 'required|string',
+        ]);
+
+        try {
+            $itemId = $request->input('item_id');
+            $company = Company::find($itemId);
+
+            if (! $company) {
+                return redirect()->back()->with('error', 'Compania nu a fost găsită.');
+            }
+
+            // Only allow deletion of manually added companies
+            if (!$company->manual_added) {
+                return redirect()->back()->with('error', 
+                    'Doar companiile adăugate manual pot fi șterse.'
+                );
+            }
+
+            $cui = $company->cui;
+            $company->delete();
+
+            Log::info('Manually added company deleted', [
+                'cui' => $cui,
+                'item_id' => $itemId,
+                'user_id' => Auth::id(),
+            ]);
+
+            return redirect()->back()->with('success',
+                "Compania cu CUI {$cui} a fost ștearsă."
+            );
+
+        } catch (\Exception $e) {
+            Log::error('Failed to delete company', [
+                'item_id' => $request->input('item_id'),
+                'error' => $e->getMessage(),
+                'user_id' => Auth::id(),
+            ]);
+
+            return redirect()->back()->with('error',
+                'Eroare la ștergerea companiei: '.$e->getMessage()
             );
         }
     }

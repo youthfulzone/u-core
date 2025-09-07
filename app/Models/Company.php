@@ -45,6 +45,8 @@ class Company extends Eloquent
         'locked', // true/false - prevents processing and modifications
         'locked_at',
         'locked_by',
+        'manual_added', // true/false - indicates if company was manually added
+        'added_by', // user id who added the company manually
 
         // Lista Firme API specific fields
         'data_source',
@@ -71,7 +73,33 @@ class Company extends Eloquent
         'vat_number',
         'vat_valid',
         'vies_request_date',
-        'source_api', // 'anaf' or 'vies' - tracks which API was used to fetch company data
+        'source_api', // 'anaf', 'vies', or 'targetare' - tracks which API was used to fetch company data
+
+        // Targetare API specific fields
+        'tax_category',
+        'company_status',
+        'county',
+        'locality',
+        'street_nr',
+        'street_name',
+        'postal_code',
+        'full_address',
+        'company_id',
+        'founding_year',
+        'split_vat',
+        'checkout_vat',
+        'vat',
+        'caen_activities',
+        'company_name',
+        'company_type_targetare',
+        'has_email',
+        'has_phone',
+        'has_verified_phone',
+        'has_administrator',
+        'has_website',
+        'has_fin_data',
+        'employees_current',
+        'targetare_synced_at',
     ];
 
     protected $casts = [
@@ -82,6 +110,7 @@ class Company extends Eloquent
         'synced_at' => 'datetime',
         'approved_at' => 'datetime',
         'locked_at' => 'datetime',
+        'targetare_synced_at' => 'datetime',
 
         // Boolean fields
         'statusRO_e_Factura' => 'boolean',
@@ -91,6 +120,15 @@ class Company extends Eloquent
         'ro_invoice_status' => 'boolean',
         'locked' => 'boolean',
         'vat_valid' => 'boolean',
+        'split_vat' => 'boolean',
+        'checkout_vat' => 'boolean',
+        'vat' => 'boolean',
+        'has_email' => 'boolean',
+        'has_phone' => 'boolean',
+        'has_verified_phone' => 'boolean',
+        'has_administrator' => 'boolean',
+        'has_website' => 'boolean',
+        'has_fin_data' => 'boolean',
 
         // Array/JSON fields
         'adresa_sediu_social' => 'array',
@@ -103,5 +141,6 @@ class Company extends Eloquent
         'status_details' => 'array',
         'caen_codes' => 'array',
         'full_address_info' => 'array',
+        'caen_activities' => 'array',
     ];
 }

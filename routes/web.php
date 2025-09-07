@@ -51,6 +51,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     Route::post('firme/unlock', [\App\Http\Controllers\FirmeController::class, 'unlock'])
         ->name('firme.unlock');
+    Route::post('firme/add', [\App\Http\Controllers\FirmeController::class, 'addCompany'])
+        ->name('firme.add');
+    Route::post('firme/delete', [\App\Http\Controllers\FirmeController::class, 'deleteCompany'])
+        ->name('firme.delete');
 
     Route::post('firme/verify', [\App\Http\Controllers\FirmeController::class, 'verifyCompany'])
         ->name('firme.verify');

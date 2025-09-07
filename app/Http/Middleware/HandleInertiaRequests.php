@@ -61,6 +61,24 @@ class HandleInertiaRequests extends Middleware
             ];
         }
 
+        // Get Targetare API status
+        $targetareData = [];
+        try {
+            $targetareService = app(\App\Services\TargetareApiService::class);
+            $remainingRequests = $targetareService->getRemainingRequests();
+            
+            $targetareData = [
+                'remainingRequests' => $remainingRequests,
+                'apiAvailable' => $remainingRequests !== null,
+            ];
+        } catch (\Exception $e) {
+            // Fallback if service fails
+            $targetareData = [
+                'remainingRequests' => null,
+                'apiAvailable' => false,
+            ];
+        }
+
         return [
             ...parent::share($request),
             'name' => config('app.name'),
@@ -79,6 +97,7 @@ class HandleInertiaRequests extends Middleware
                 'info' => $request->session()->get('info'),
             ],
             ...$anafData,
+            'targetare' => $targetareData,
         ];
     }
 }

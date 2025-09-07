@@ -35,4 +35,8 @@ return [
         ],
     ],
 
+    'targetare' => [
+        'bearer_token' => env('TARGETARE_BEARER_TOKEN'),
+    ],
+
 ];
