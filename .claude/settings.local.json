@@ -22,7 +22,9 @@
       "Bash(git rm:*)",
       "Bash(git commit:*)",
       "Bash(git push:*)",
-      "mcp__laravel-boost__search-docs"
+      "mcp__laravel-boost__search-docs",
+      "mcp__herd__isolate_or_unisolate_site",
+      "Bash(mongosh:*)"
     ],
     "deny": [],
     "ask": [],

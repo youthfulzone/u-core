@@ -36,11 +36,13 @@ class FirmeController extends Controller
             // Sort alphabetically by company name (denumire)
             // Handle cases where denumire might be null or "Se încarcă..."
             $name = $item->denumire ?? '';
-            if ($name === 'Se încarcă...' || $name === '') {
-                // Put companies without names at the end
-                return 'zzz_' . $item->cui;
+            // Companies still loading should appear first (by CUI) for easy monitoring
+            if ($name === 'Se încarcă...' || $name === '' || $name === 'Date indisponibile') {
+                return '000_' . str_pad($item->cui, 9, '0', STR_PAD_LEFT); // Sort loading companies by CUI numerically
             }
-            return strtolower($name);
+            
+            // All other companies sorted alphabetically by name
+            return '999_' . strtolower($name);
         })->values();
 
         // Build items list
@@ -291,11 +293,13 @@ class FirmeController extends Controller
             // Sort alphabetically by company name (denumire)
             // Handle cases where denumire might be null or "Se încarcă..."
             $name = $item->denumire ?? '';
-            if ($name === 'Se încarcă...' || $name === '') {
-                // Put companies without names at the end
-                return 'zzz_' . $item->cui;
+            // Companies still loading should appear first (by CUI) for easy monitoring
+            if ($name === 'Se încarcă...' || $name === '' || $name === 'Date indisponibile') {
+                return '000_' . str_pad($item->cui, 9, '0', STR_PAD_LEFT); // Sort loading companies by CUI numerically
             }
-            return strtolower($name);
+            
+            // All other companies sorted alphabetically by name
+            return '999_' . strtolower($name);
         })->values();
 
         // Build items list
@@ -609,6 +613,50 @@ class FirmeController extends Controller
 
             return redirect()->back()->with('error',
                 'Eroare la ștergerea companiei: '.$e->getMessage()
+            );
+        }
+    }
+
+    public function clearAllCompanies(Request $request): RedirectResponse
+    {
+        try {
+            // Count companies before deletion
+            $count = Company::count();
+            
+            if ($count === 0) {
+                return redirect()->back()->with('info', 'Nu există companii în baza de date.');
+            }
+
+            // Delete all companies
+            Company::query()->delete();
+            
+            // Verify deletion
+            $remainingCount = Company::count();
+            
+            Log::info('All companies cleared from database', [
+                'deleted_count' => $count,
+                'remaining_count' => $remainingCount,
+                'user_id' => Auth::id(),
+            ]);
+
+            if ($remainingCount === 0) {
+                return redirect()->back()->with('success',
+                    "Toate companiile ({$count}) au fost șterse din baza de date."
+                );
+            } else {
+                return redirect()->back()->with('error',
+                    "Ștergere parțială: au fost șterse {$count} companii, dar {$remainingCount} au rămas în baza de date."
+                );
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Failed to clear all companies', [
+                'error' => $e->getMessage(),
+                'user_id' => Auth::id(),
+            ]);
+
+            return redirect()->back()->with('error',
+                'Eroare la ștergerea companiilor: '.$e->getMessage()
             );
         }
     }

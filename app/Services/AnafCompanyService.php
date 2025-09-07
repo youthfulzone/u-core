@@ -38,12 +38,14 @@ class AnafCompanyService
                 continue;
             }
 
-            // Immediately save company with just the CUI
+            // Auto-approve companies from synced messages - skip Accept/Reject step
             Company::create([
                 'cui' => $cui,
-                'denumire' => null, // Will be populated by background fetch
-                'status' => 'pending_data', // Indicates data needs to be fetched
-                'synced_at' => null,
+                'denumire' => 'Se încarcă...', // Temporary loading state
+                'status' => 'approved', // Auto-approve to skip manual review
+                'approved_at' => now(),
+                'approved_by' => 'system', // Mark as system-approved
+                'synced_at' => null, // Will be updated when data is fetched
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
@@ -51,7 +53,7 @@ class AnafCompanyService
             $queuedCount++;
         }
 
-        Log::info('Companies registered for processing', [
+        Log::info('Companies auto-approved for processing', [
             'registered_count' => $queuedCount,
             'total_cuis' => count($cuis),
             'cuis_processed' => $cuis,
@@ -515,18 +517,33 @@ class AnafCompanyService
 
     public function processNextPendingCompany(): array
     {
-        // First priority: Get companies that have no data fetched (null denumire) regardless of status
-        // Process from first (top) to last - oldest first, but skip locked companies
-        $company = Company::whereNull('denumire')
-            ->whereNotIn('status', ['processing']) // Don't pick up companies currently being processed
-            ->where('locked', '!=', true) // Skip locked companies
-            ->orderBy('created_at', 'asc') // Process from first (top) to last
+        // Priority processing for companies that need data fetching
+        // Try different priority levels in sequence
+        
+        // Priority 1: Companies with 'Se încarcă...' (auto-approved from sync)
+        $company = Company::where('denumire', 'Se încarcă...')
+            ->whereNotIn('status', ['processing'])
+            ->where('locked', '!=', true)
+            ->orderBy('created_at', 'asc')
             ->first();
-
-        // Second priority: If no companies without names, look for pending_data status (also skip locked)
+        
+        // Priority 2: Approved companies with null or empty denumire 
+        if (!$company) {
+            $company = Company::where('status', 'approved')
+                ->where(function($q) {
+                    $q->whereNull('denumire')->orWhere('denumire', '');
+                })
+                ->whereNotIn('status', ['processing'])
+                ->where('locked', '!=', true)
+                ->orderBy('created_at', 'asc')
+                ->first();
+        }
+        
+        // Priority 3: Companies with pending_data status
         if (!$company) {
             $company = Company::where('status', 'pending_data')
-                ->where('locked', '!=', true) // Skip locked companies
+                ->whereNotIn('status', ['processing'])
+                ->where('locked', '!=', true)
                 ->orderBy('created_at', 'asc')
                 ->first();
         }
@@ -539,32 +556,65 @@ class AnafCompanyService
             ];
         }
 
-        Log::info('🔄 Processing company (prioritizing unfetched data)', [
+        Log::info('🔄 Processing company with Targetare → ANAF → VIES cascade', [
             'cui' => $company->cui,
             'current_status' => $company->status,
-            'has_denumire' => !is_null($company->denumire),
+            'current_denumire' => $company->denumire,
             'created_at' => $company->created_at
         ]);
 
         try {
+            // Preserve approval status if already approved
+            $wasApproved = $company->status === 'approved';
+            $approvalData = [];
+            if ($wasApproved) {
+                $approvalData = [
+                    'approved_at' => $company->approved_at,
+                    'approved_by' => $company->approved_by,
+                ];
+            }
+
             // Update status to processing
             $company->update(['status' => 'processing']);
             
-            // Enforce rate limiting
+            // Enforce rate limiting - 2 seconds between API calls
             $this->enforceRateLimit();
             
-            // Fetch company data from Lista Firme API first
-            $companyData = $this->fetchCompanyFromListaFirme($company->cui);
+            // Implement Targetare → ANAF → VIES cascade approach
+            $companyData = null;
+            $source = null;
             
-            // If Lista Firme doesn't have the company, try VIES as fallback
-            if (!$companyData || empty($companyData['name'])) {
-                Log::info('🔄 Lista Firme failed, trying VIES API as fallback', [
-                    'cui' => $company->cui
+            // 1. First try Targetare API (primary source)
+            Log::info('🎯 Trying Targetare API first', ['cui' => $company->cui]);
+            $companyData = $this->fetchCompanyFromTargetare($company->cui);
+            if ($companyData && !empty($companyData['name'])) {
+                $source = 'Targetare';
+                Log::info('✅ Targetare API successful', [
+                    'cui' => $company->cui,
+                    'company_name' => $companyData['name']
                 ]);
-                
+            }
+            
+            // 2. If Targetare fails, try Lista Firme (ANAF) API
+            if (!$companyData || empty($companyData['name'])) {
+                Log::info('🏢 Targetare failed, trying Lista Firme (ANAF) API', ['cui' => $company->cui]);
+                $companyData = $this->fetchCompanyFromListaFirme($company->cui);
+                if ($companyData && !empty($companyData['name'])) {
+                    $source = 'ANAF';
+                    Log::info('✅ Lista Firme (ANAF) API successful', [
+                        'cui' => $company->cui,
+                        'company_name' => $companyData['name']
+                    ]);
+                }
+            }
+            
+            // 3. If both fail, try VIES as final fallback
+            if (!$companyData || empty($companyData['name'])) {
+                Log::info('🇪🇺 ANAF failed, trying VIES API as final fallback', ['cui' => $company->cui]);
                 $viesData = $this->fetchCompanyFromVIES($company->cui);
                 if ($viesData && !empty($viesData['name'])) {
                     $companyData = $viesData;
+                    $source = 'VIES';
                     Log::info('✅ VIES fallback successful', [
                         'cui' => $company->cui,
                         'company_name' => $viesData['name']
@@ -573,17 +623,53 @@ class AnafCompanyService
             }
             
             if ($companyData && !empty($companyData['name'])) {
+                // Preserve approval status when updating
+                $newStatus = $wasApproved ? 'approved' : 'active';
+                
                 // Prepare update data based on the source
                 $updateData = [
                     'denumire' => $companyData['name'],
                     'adresa' => $this->buildAddressFromAlternative($companyData),
-                    'data_source' => $companyData['data_source'] ?? 'Lista-firme.info',
+                    'data_source' => $companyData['data_source'] ?? $source,
                     'synced_at' => now(),
-                    'status' => 'active',
+                    'status' => $newStatus,
                 ];
 
+                // Restore approval data if it was previously approved
+                if ($wasApproved) {
+                    $updateData = array_merge($updateData, $approvalData);
+                }
+
                 // Add source-specific fields
-                if (!empty($companyData['data_source']) && $companyData['data_source'] === 'VIES-EU') {
+                if (!empty($companyData['data_source']) && $companyData['data_source'] === 'Targetare API') {
+                    // Targetare-specific fields
+                    $updateData = array_merge($updateData, [
+                        'source_api' => 'targetare',
+                        'tax_category' => $companyData['tax_category'] ?? null,
+                        'company_status' => $companyData['company_status'] ?? null,
+                        'county' => $companyData['county'] ?? null,
+                        'locality' => $companyData['locality'] ?? null,
+                        'street_nr' => $companyData['street_nr'] ?? null,
+                        'street_name' => $companyData['street_name'] ?? null,
+                        'postal_code' => $companyData['postal_code'] ?? null,
+                        'full_address' => $companyData['full_address'] ?? null,
+                        'company_id' => $companyData['company_id'] ?? null,
+                        'founding_year' => $companyData['founding_year'] ?? null,
+                        'split_vat' => $companyData['split_vat'] ?? null,
+                        'checkout_vat' => $companyData['checkout_vat'] ?? null,
+                        'vat' => $companyData['vat'] ?? null,
+                        'caen_activities' => $companyData['caen_activities'] ?? [],
+                        'company_type_targetare' => $companyData['company_type_targetare'] ?? null,
+                        'has_email' => $companyData['has_email'] ?? null,
+                        'has_phone' => $companyData['has_phone'] ?? null,
+                        'has_verified_phone' => $companyData['has_verified_phone'] ?? null,
+                        'has_administrator' => $companyData['has_administrator'] ?? null,
+                        'has_website' => $companyData['has_website'] ?? null,
+                        'has_fin_data' => $companyData['has_fin_data'] ?? null,
+                        'employees_current' => $companyData['employees_current'] ?? null,
+                        'targetare_synced_at' => $companyData['targetare_synced_at'] ?? null,
+                    ]);
+                } elseif (!empty($companyData['data_source']) && $companyData['data_source'] === 'VIES-EU') {
                     // VIES-specific fields
                     $updateData = array_merge($updateData, [
                         'source_api' => 'vies',
@@ -621,38 +707,60 @@ class AnafCompanyService
                 // Update company with fetched data
                 $company->update($updateData);
                 
-                Log::info('✅ Company data fetched successfully', [
+                Log::info('✅ Company data fetched successfully via cascade', [
                     'cui' => $company->cui,
-                    'company_name' => $companyData['name']
+                    'company_name' => $companyData['name'],
+                    'source' => $source,
+                    'was_approved' => $wasApproved
                 ]);
             } else {
-                // No valid data found, mark as data_not_found
-                $company->update([
+                // No valid data found from any source, mark as data_not_found but preserve approval
+                $finalStatus = $wasApproved ? 'approved' : 'data_not_found';
+                $updateData = [
                     'denumire' => 'Date indisponibile',
-                    'status' => 'data_not_found',
+                    'status' => $finalStatus,
                     'synced_at' => now(),
-                ]);
+                ];
                 
-                Log::warning('⚠️ No valid data found for company', ['cui' => $company->cui]);
+                if ($wasApproved) {
+                    $updateData = array_merge($updateData, $approvalData);
+                }
+                
+                $company->update($updateData);
+                
+                Log::warning('⚠️ No valid data found from any source (Targetare → ANAF → VIES)', [
+                    'cui' => $company->cui,
+                    'preserved_approval' => $wasApproved
+                ]);
             }
 
             return [
                 'success' => true,
-                'message' => 'Company processed successfully',
+                'message' => 'Company processed successfully via cascade',
                 'processed_cui' => $company->cui,
-                'company_name' => $company->denumire
+                'company_name' => $company->denumire,
+                'source_used' => $source ?? 'none'
             ];
 
         } catch (\Exception $e) {
-            // Update status to failed if there's an error
-            $company->update([
-                'status' => 'failed',
+            // Update status to failed if there's an error, but preserve approval if it existed
+            $errorStatus = ($company->status === 'approved' || $company->approved_at) ? 'approved' : 'failed';
+            $errorUpdate = [
+                'status' => $errorStatus,
                 'denumire' => 'Eroare în procesare'
-            ]);
+            ];
             
-            Log::error('❌ Failed to process company', [
+            if ($errorStatus === 'approved' && $company->approved_at) {
+                $errorUpdate['approved_at'] = $company->approved_at;
+                $errorUpdate['approved_by'] = $company->approved_by;
+            }
+            
+            $company->update($errorUpdate);
+            
+            Log::error('❌ Failed to process company via cascade', [
                 'cui' => $company->cui,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'preserved_approval' => $errorStatus === 'approved'
             ]);
 
             return [

@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { PlaceholderPattern } from '@/components/ui/placeholder-pattern';
-import { Building2, CheckCircle2, XCircle, Clock, Loader2, Trash2, RefreshCw, Play, Pause, Lock, Unlock, Check, X, Zap, ExternalLink, Plus } from 'lucide-react';
+import { Building2, CheckCircle2, XCircle, Clock, Loader2, Trash2, RefreshCw, Play, Pause, Lock, Unlock, Check, X, Zap, ExternalLink, Plus, Database } from 'lucide-react';
 import { type BreadcrumbItem } from '@/types';
 
 interface CompanyItem {
@@ -78,6 +78,8 @@ export default function FirmeIndex() {
     const [isAddingCompany, setIsAddingCompany] = useState(false);
     const [deletingItems, setDeletingItems] = useState<Set<string>>(new Set());
     const [confirmingDelete, setConfirmingDelete] = useState<Set<string>>(new Set());
+    const [isClearingDatabase, setIsClearingDatabase] = useState(false);
+    const [confirmingClearDatabase, setConfirmingClearDatabase] = useState(false);
 
     // Watch for flash message changes and suppress them when we have pending button actions
     useEffect(() => {
@@ -96,10 +98,12 @@ export default function FirmeIndex() {
     }, [flash, pendingActions.size]);
 
     
-    // Check if there are companies that need processing (not approved)
+    // Check if there are companies that need processing (including approved ones that still need data)
     const hasPendingCompanies = companies.data.some(item => 
-        item.status !== 'approved' && 
-        (item.status === 'pending_data' || item.status === 'processing' || !item.denumire || item.denumire === 'Se încarcă...')
+        item.status === 'pending_data' || 
+        item.status === 'processing' || 
+        !item.denumire || 
+        item.denumire === 'Se încarcă...'
     );
 
     // Clear visual feedback states when companies data changes
@@ -127,6 +131,31 @@ export default function FirmeIndex() {
             return newMap;
         });
     }, [companies.data]);
+
+    // Refresh data when component mounts or user navigates to this page
+    useEffect(() => {
+        const refreshData = async () => {
+            try {
+                const response = await fetch('/firme/status');
+                if (response.ok) {
+                    const data = await response.json();
+                    setCompanies(data.companies);
+                    setStats(data.stats);
+                }
+            } catch (error) {
+                console.error('Failed to refresh data:', error);
+            }
+        };
+
+        // Refresh data when component first loads
+        refreshData();
+
+        // Also refresh when window gains focus (for tab switching)
+        const handleFocus = () => refreshData();
+        window.addEventListener('focus', handleFocus);
+        
+        return () => window.removeEventListener('focus', handleFocus);
+    }, []); // Empty dependency array means this runs once on mount
 
     // Auto-refresh and processing functionality - only when there are pending companies
     useEffect(() => {
@@ -402,13 +431,18 @@ export default function FirmeIndex() {
     };
 
     const getVatStatus = (item: CompanyItem) => {
-        if (!item.vat) {
+        if (!item.vat && item.source_api !== 'vies') {
             return '-';
         }
         
         let status = 'Da';
         
-        // Check for TVA la Incasare
+        // For VIES companies, always show "Da - VIES" since they're VAT registered
+        if (item.source_api === 'vies') {
+            return 'Da - VIES';
+        }
+        
+        // Check for TVA la Incasare for non-VIES companies
         if (item.split_vat || item.checkout_vat) {
             status += ' - Încasare';
         }
@@ -474,6 +508,27 @@ export default function FirmeIndex() {
             newSet.delete(itemId);
             return newSet;
         });
+    };
+
+    const handleClearDatabase = () => {
+        setConfirmingClearDatabase(true);
+    };
+
+    const confirmClearDatabase = () => {
+        setConfirmingClearDatabase(false);
+        setIsClearingDatabase(true);
+        
+        router.delete('/firme/clear-all', {
+            preserveState: false,
+            preserveScroll: true,
+            onFinish: () => {
+                setIsClearingDatabase(false);
+            }
+        });
+    };
+
+    const cancelClearDatabase = () => {
+        setConfirmingClearDatabase(false);
     };
 
     return (
@@ -604,6 +659,47 @@ export default function FirmeIndex() {
                                     {!hasPendingCompanies ? 'Auto-Refresh (Inactiv)' : 
                                      autoRefresh ? 'Oprește Auto-Refresh' : 'Pornește Auto-Refresh'}
                                 </Button>
+                                
+                                {/* Clear Database Button */}
+                                <div className="flex items-center gap-1">
+                                    {confirmingClearDatabase ? (
+                                        <>
+                                            <Button
+                                                size="sm"
+                                                onClick={confirmClearDatabase}
+                                                disabled={isClearingDatabase}
+                                                className="bg-red-600 hover:bg-red-700 text-white border-red-600"
+                                            >
+                                                {isClearingDatabase ? (
+                                                    <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                                                ) : (
+                                                    <Check className="h-4 w-4 mr-1" />
+                                                )}
+                                                Confirmă
+                                            </Button>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={cancelClearDatabase}
+                                                disabled={isClearingDatabase}
+                                            >
+                                                <X className="h-4 w-4 mr-1" />
+                                                Anulează
+                                            </Button>
+                                        </>
+                                    ) : (
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={handleClearDatabase}
+                                            disabled={isClearingDatabase}
+                                            className="border-red-300 text-red-600 hover:bg-red-50 hover:border-red-400"
+                                        >
+                                            <Database className="h-4 w-4 mr-1" />
+                                            Golește DB
+                                        </Button>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     </CardHeader>
@@ -710,8 +806,8 @@ export default function FirmeIndex() {
                                                             </>
                                                         )}
                                                         
-                                                        {/* Targetare redirect button - show when company has valid name */}
-                                                        {item.denumire && item.denumire !== 'Se încarcă...' && (
+                                                        {/* Targetare redirect button - show when company has valid name and is not from VIES */}
+                                                        {item.denumire && item.denumire !== 'Se încarcă...' && item.source_api !== 'vies' && (
                                                             <Button
                                                                 size="sm"
                                                                 variant="outline"
