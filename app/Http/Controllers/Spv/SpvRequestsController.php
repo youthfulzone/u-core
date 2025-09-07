@@ -122,19 +122,11 @@ class SpvRequestsController extends Controller
         try {
             $anafResponse = $this->makeAnafRequest($request->cif, $request->document_type);
 
-            $spvRequest->update([
-                'status' => 'completed',
-                'response_data' => $anafResponse,
-                'processed_at' => now(),
-            ]);
+            $spvRequest->markAsCompleted($anafResponse);
 
-            return back()->with('success', 'Cererea a fost trimisă cu succes către ANAF.');
+            return back()->with('success', 'Cererea a fost trimisă cu succes către ANAF. ID Solicitare: '.($anafResponse['id_solicitare'] ?? 'N/A'));
         } catch (\Exception $e) {
-            $spvRequest->update([
-                'status' => 'failed',
-                'error_message' => $e->getMessage(),
-                'processed_at' => now(),
-            ]);
+            $spvRequest->markAsFailed($e->getMessage());
 
             return back()->with('error', 'Eroare la trimiterea cererii: '.$e->getMessage());
         }

@@ -371,6 +371,25 @@ class AnafCompanyService
     private function fetchCompanyFromVIES(string $cui): ?array
     {
         try {
+            // Rate limiting: 1 request per 2 seconds for VIES API
+            $rateLimitKey = 'vies_api_rate_limit';
+            $lastRequestTime = Cache::get($rateLimitKey);
+            
+            if ($lastRequestTime) {
+                $timeSinceLastRequest = microtime(true) - $lastRequestTime;
+                if ($timeSinceLastRequest < 2.0) {
+                    $waitTime = 2.0 - $timeSinceLastRequest;
+                    Log::info('VIES API rate limiting - waiting', [
+                        'wait_time_seconds' => $waitTime,
+                        'cui' => $cui
+                    ]);
+                    usleep((int)($waitTime * 1000000)); // Convert to microseconds
+                }
+            }
+            
+            // Store the current request time
+            Cache::put($rateLimitKey, microtime(true), 60); // Cache for 1 minute
+            
             // VIES API endpoint for VAT validation (GET method using new REST format)
             $viesUrl = "https://ec.europa.eu/taxation_customs/vies/rest-api/ms/RO/vat/{$cui}";
 
@@ -563,6 +582,7 @@ class AnafCompanyService
                 if (!empty($companyData['data_source']) && $companyData['data_source'] === 'VIES-EU') {
                     // VIES-specific fields
                     $updateData = array_merge($updateData, [
+                        'source_api' => 'vies',
                         'country_code' => $companyData['country_code'] ?? 'RO',
                         'vat_number' => $companyData['vat_number'] ?? null,
                         'vat_valid' => $companyData['valid'] ?? false,
@@ -571,6 +591,7 @@ class AnafCompanyService
                 } else {
                     // Lista Firme specific fields
                     $updateData = array_merge($updateData, [
+                        'source_api' => 'anaf',
                         'nrRegCom' => $companyData['reg_com'] ?? null,
                         'telefon' => $companyData['info']['phone'] ?? null,
                         'fax' => $companyData['info']['fax'] ?? null,
@@ -705,6 +726,7 @@ class AnafCompanyService
                 if (!empty($companyData['data_source']) && $companyData['data_source'] === 'VIES-EU') {
                     // VIES-specific fields
                     $updateData = array_merge($updateData, [
+                        'source_api' => 'vies',
                         'country_code' => $companyData['country_code'] ?? 'RO',
                         'vat_number' => $companyData['vat_number'] ?? null,
                         'vat_valid' => $companyData['valid'] ?? false,

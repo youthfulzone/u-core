@@ -48,6 +48,7 @@ class FirmeController extends Controller
                 'updated_at' => $company->updated_at,
                 'synced_at' => $company->synced_at,
                 'locked' => $company->locked ?? false,
+                'source_api' => $company->source_api ?? null,
             ]);
         }
 
@@ -287,6 +288,7 @@ class FirmeController extends Controller
                 'updated_at' => $company->updated_at,
                 'synced_at' => $company->synced_at,
                 'locked' => $company->locked ?? false,
+                'source_api' => $company->source_api ?? null,
             ]);
         }
 

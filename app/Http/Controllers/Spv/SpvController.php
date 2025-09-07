@@ -135,11 +135,33 @@ class SpvController extends Controller
                 }
             }
 
-            // Extract and queue CUIs for company lookup
+            // Extract and queue CUIs for company lookup - check both main cui field and individual messages
             $queuedCompanies = 0;
+            $allCuis = collect();
+
+            // Get CUIs from main response
             if (! empty($response['cui'])) {
-                $cuis = is_string($response['cui']) ? explode(',', $response['cui']) : (array) $response['cui'];
-                $queuedCompanies = $this->companyService->queueCuisFromMessage($cuis);
+                $mainCuis = is_string($response['cui']) ? explode(',', $response['cui']) : (array) $response['cui'];
+                $allCuis = $allCuis->merge($mainCuis);
+            }
+
+            // Get CUIs from individual messages
+            foreach ($response['mesaje'] as $messageData) {
+                if (!empty($messageData['cif'])) {
+                    $allCuis->push($messageData['cif']);
+                }
+            }
+
+            // Queue unique valid CUIs
+            if ($allCuis->isNotEmpty()) {
+                $validCuis = $allCuis
+                    ->map(fn($cui) => trim($cui))
+                    ->filter(fn($cui) => !empty($cui) && preg_match('/^[0-9]{6,9}$/', $cui))
+                    ->unique()
+                    ->values()
+                    ->toArray();
+                
+                $queuedCompanies = $this->companyService->queueCuisFromMessage($validCuis);
             }
 
             $message = "Synchronized {$syncedCount} new messages.";
@@ -391,11 +413,43 @@ class SpvController extends Controller
                 }
             }
 
+            // Extract and queue CUIs from processed direct ANAF data
+            $queuedCompanies = 0;
+            $allCuis = collect();
+
+            // Get CUIs from main response
+            if (! empty($anafData['cui'])) {
+                $mainCuis = is_string($anafData['cui']) ? explode(',', $anafData['cui']) : (array) $anafData['cui'];
+                $allCuis = $allCuis->merge($mainCuis);
+            }
+
+            // Get CUIs from individual messages
+            if (!empty($anafData['mesaje']) && is_array($anafData['mesaje'])) {
+                foreach ($anafData['mesaje'] as $messageData) {
+                    if (!empty($messageData['cif'])) {
+                        $allCuis->push($messageData['cif']);
+                    }
+                }
+            }
+
+            // Queue unique valid CUIs
+            if ($allCuis->isNotEmpty()) {
+                $validCuis = $allCuis
+                    ->map(fn($cui) => trim($cui))
+                    ->filter(fn($cui) => !empty($cui) && preg_match('/^[0-9]{6,9}$/', $cui))
+                    ->unique()
+                    ->values()
+                    ->toArray();
+                
+                $queuedCompanies = $this->companyService->queueCuisFromMessage($validCuis);
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => "Successfully processed {$syncedCount} new messages from direct ANAF call.",
                 'synced_count' => $syncedCount,
                 'total_messages' => count($anafData['mesaje']),
+                'queued_companies' => $queuedCompanies,
             ]);
 
         } catch (\Exception $e) {
@@ -514,11 +568,43 @@ class SpvController extends Controller
                         }
                     }
 
+                    // Extract and queue CUIs from auto-synced messages
+                    $queuedCompanies = 0;
+                    $allCuis = collect();
+
+                    // Get CUIs from main response
+                    if (! empty($response['cui'])) {
+                        $mainCuis = is_string($response['cui']) ? explode(',', $response['cui']) : (array) $response['cui'];
+                        $allCuis = $allCuis->merge($mainCuis);
+                    }
+
+                    // Get CUIs from individual messages
+                    if (!empty($response['mesaje']) && is_array($response['mesaje'])) {
+                        foreach ($response['mesaje'] as $messageData) {
+                            if (!empty($messageData['cif'])) {
+                                $allCuis->push($messageData['cif']);
+                            }
+                        }
+                    }
+
+                    // Queue unique valid CUIs
+                    if ($allCuis->isNotEmpty()) {
+                        $validCuis = $allCuis
+                            ->map(fn($cui) => trim($cui))
+                            ->filter(fn($cui) => !empty($cui) && preg_match('/^[0-9]{6,9}$/', $cui))
+                            ->unique()
+                            ->values()
+                            ->toArray();
+                        
+                        $queuedCompanies = $this->companyService->queueCuisFromMessage($validCuis);
+                    }
+
                     return response()->json([
                         'success' => true,
                         'message' => "Successfully synced {$syncedCount} new messages automatically!",
                         'synced_count' => $syncedCount,
                         'total_messages' => count($response['mesaje']),
+                        'queued_companies' => $queuedCompanies,
                     ]);
                 }
             } catch (\Exception $e) {

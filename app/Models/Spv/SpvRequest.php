@@ -30,6 +30,7 @@ class SpvRequest extends Model
         'response_data',
         'error_message',
         'processed_at',
+        'response_received_at',
     ];
 
     protected function casts(): array
@@ -38,18 +39,30 @@ class SpvRequest extends Model
             'parametri' => 'array',
             'response_data' => 'array',
             'processed_at' => 'datetime',
+            'response_received_at' => 'datetime',
         ];
     }
 
     public const STATUS_PENDING = 'pending';
 
-    public const STATUS_PROCESSED = 'processed';
+    public const STATUS_COMPLETED = 'completed';
 
-    public const STATUS_ERROR = 'error';
+    public const STATUS_FAILED = 'failed';
+
+    public const STATUS_RESPONSE_RECEIVED = 'response_received';
 
     public function user()
     {
         return $this->belongsTo(\App\Models\User::class);
+    }
+
+    public function relatedMessages()
+    {
+        if (! $this->response_data || ! isset($this->response_data['id_solicitare'])) {
+            return SpvMessage::whereRaw('false'); // Return empty query
+        }
+
+        return SpvMessage::where('id_solicitare', $this->response_data['id_solicitare']);
     }
 
     public function isPending(): bool
@@ -57,30 +70,48 @@ class SpvRequest extends Model
         return $this->status === self::STATUS_PENDING;
     }
 
-    public function isProcessed(): bool
+    public function isCompleted(): bool
     {
-        return $this->status === self::STATUS_PROCESSED;
+        return $this->status === self::STATUS_COMPLETED;
     }
 
-    public function hasError(): bool
+    public function hasFailed(): bool
     {
-        return $this->status === self::STATUS_ERROR;
+        return $this->status === self::STATUS_FAILED;
     }
 
-    public function markAsProcessed(array $responseData): void
+    public function hasResponseReceived(): bool
+    {
+        return $this->status === self::STATUS_RESPONSE_RECEIVED;
+    }
+
+    public function hasResponse(): bool
+    {
+        return $this->relatedMessages()->exists();
+    }
+
+    public function markAsCompleted(array $responseData): void
     {
         $this->update([
-            'status' => self::STATUS_PROCESSED,
+            'status' => self::STATUS_COMPLETED,
             'response_data' => $responseData,
             'processed_at' => now(),
             'error_message' => null,
         ]);
     }
 
-    public function markAsError(string $errorMessage): void
+    public function markAsResponseReceived(): void
     {
         $this->update([
-            'status' => self::STATUS_ERROR,
+            'status' => self::STATUS_RESPONSE_RECEIVED,
+            'response_received_at' => now(),
+        ]);
+    }
+
+    public function markAsFailed(string $errorMessage): void
+    {
+        $this->update([
+            'status' => self::STATUS_FAILED,
             'error_message' => $errorMessage,
             'processed_at' => now(),
         ]);

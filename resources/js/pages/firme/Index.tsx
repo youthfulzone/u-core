@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { PlaceholderPattern } from '@/components/ui/placeholder-pattern';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Building2, CheckCircle2, XCircle, Clock, Loader2, Trash2, RefreshCw, Play, Pause, Lock, Unlock } from 'lucide-react';
+import { Building2, CheckCircle2, XCircle, Clock, Loader2, Trash2, RefreshCw, Play, Pause, Lock, Unlock, Check, X } from 'lucide-react';
 import { type BreadcrumbItem } from '@/types';
 
 interface CompanyItem {
@@ -21,6 +21,7 @@ interface CompanyItem {
     updated_at: string;
     synced_at?: string | null;
     locked?: boolean;
+    source_api?: 'anaf' | 'vies';
 }
 
 interface PaginatedCompanies {
@@ -61,7 +62,27 @@ export default function FirmeIndex() {
     const [massActionType, setMassActionType] = useState<'approve' | 'reject' | null>(null);
     const [processingItems, setProcessingItems] = useState<Set<string>>(new Set());
     const [lockingItems, setLockingItems] = useState<Set<string>>(new Set());
+    const [verifyingItems, setVerifyingItems] = useState<Map<string, 'loading' | 'success' | 'error'>>(new Map());
+    const [lockResults, setLockResults] = useState<Map<string, 'success' | 'error'>>(new Map());
     const [autoRefresh, setAutoRefresh] = useState(true);
+    const [pendingActions, setPendingActions] = useState<Map<string, 'verify' | 'lock' | 'unlock'>>(new Map());
+    const [suppressFlashMessages, setSuppressFlashMessages] = useState(false);
+
+    // Watch for flash message changes and suppress them when we have pending button actions
+    useEffect(() => {
+        if (flash && (flash.success || flash.error) && pendingActions.size > 0) {
+            setSuppressFlashMessages(true);
+            
+            // Clear pending actions and reset suppress flag after a delay
+            setPendingActions(new Map());
+            setTimeout(() => {
+                setSuppressFlashMessages(false);
+            }, 100);
+        } else if (flash && (flash.success || flash.error)) {
+            // No pending actions, allow normal flash messages
+            setSuppressFlashMessages(false);
+        }
+    }, [flash, pendingActions.size]);
 
     // Get only items that need review (all items can be approved/rejected)
     const pendingItems = companies.data;
@@ -71,6 +92,32 @@ export default function FirmeIndex() {
         item.status !== 'approved' && 
         (item.status === 'pending_data' || item.status === 'processing' || !item.denumire || item.denumire === 'Se încarcă...')
     );
+
+    // Clear visual feedback states when companies data changes
+    useEffect(() => {
+        // Clear any visual feedback for items that are no longer in the current page
+        const currentIds = new Set(companies.data.map(item => item.id));
+        
+        setVerifyingItems(prev => {
+            const newMap = new Map();
+            prev.forEach((value, key) => {
+                if (currentIds.has(key)) {
+                    newMap.set(key, value);
+                }
+            });
+            return newMap;
+        });
+        
+        setLockResults(prev => {
+            const newMap = new Map();
+            prev.forEach((value, key) => {
+                if (currentIds.has(key)) {
+                    newMap.set(key, value);
+                }
+            });
+            return newMap;
+        });
+    }, [companies.data]);
 
     // Auto-refresh and processing functionality - only when there are pending companies
     useEffect(() => {
@@ -165,30 +212,158 @@ export default function FirmeIndex() {
 
     const handleLock = (itemId: string) => {
         setLockingItems(prev => new Set(prev).add(itemId));
+        setPendingActions(prev => new Map(prev).set(itemId, 'lock'));
+        
+        const startTime = Date.now();
+        
         router.post('/firme/lock', { item_id: itemId }, {
             preserveState: false,
             preserveScroll: true,
-            onFinish: () => {
-                setLockingItems(prev => {
-                    const newSet = new Set(prev);
-                    newSet.delete(itemId);
-                    return newSet;
-                });
+            onSuccess: () => {
+                // Ensure loading shows for at least 2 seconds, then show success
+                const elapsed = Date.now() - startTime;
+                const remainingTime = Math.max(0, 2000 - elapsed);
+                
+                setTimeout(() => {
+                    setLockingItems(prev => {
+                        const newSet = new Set(prev);
+                        newSet.delete(itemId);
+                        return newSet;
+                    });
+                    setLockResults(prev => new Map(prev).set(itemId, 'success'));
+                    // Clear success state after 2 seconds
+                    setTimeout(() => {
+                        setLockResults(prev => {
+                            const newMap = new Map(prev);
+                            newMap.delete(itemId);
+                            return newMap;
+                        });
+                    }, 2000);
+                }, remainingTime);
+            },
+            onError: () => {
+                // Ensure loading shows for at least 2 seconds, then show error
+                const elapsed = Date.now() - startTime;
+                const remainingTime = Math.max(0, 2000 - elapsed);
+                
+                setTimeout(() => {
+                    setLockingItems(prev => {
+                        const newSet = new Set(prev);
+                        newSet.delete(itemId);
+                        return newSet;
+                    });
+                    setLockResults(prev => new Map(prev).set(itemId, 'error'));
+                    // Clear error state after 2 seconds
+                    setTimeout(() => {
+                        setLockResults(prev => {
+                            const newMap = new Map(prev);
+                            newMap.delete(itemId);
+                            return newMap;
+                        });
+                    }, 2000);
+                }, remainingTime);
             }
         });
     };
 
     const handleUnlock = (itemId: string) => {
         setLockingItems(prev => new Set(prev).add(itemId));
+        setPendingActions(prev => new Map(prev).set(itemId, 'unlock'));
+        
+        const startTime = Date.now();
+        
         router.post('/firme/unlock', { item_id: itemId }, {
             preserveState: false,
             preserveScroll: true,
-            onFinish: () => {
-                setLockingItems(prev => {
-                    const newSet = new Set(prev);
-                    newSet.delete(itemId);
-                    return newSet;
-                });
+            onSuccess: () => {
+                // Ensure loading shows for at least 2 seconds, then show success
+                const elapsed = Date.now() - startTime;
+                const remainingTime = Math.max(0, 2000 - elapsed);
+                
+                setTimeout(() => {
+                    setLockingItems(prev => {
+                        const newSet = new Set(prev);
+                        newSet.delete(itemId);
+                        return newSet;
+                    });
+                    setLockResults(prev => new Map(prev).set(itemId, 'success'));
+                    // Clear success state after 2 seconds
+                    setTimeout(() => {
+                        setLockResults(prev => {
+                            const newMap = new Map(prev);
+                            newMap.delete(itemId);
+                            return newMap;
+                        });
+                    }, 2000);
+                }, remainingTime);
+            },
+            onError: () => {
+                // Ensure loading shows for at least 2 seconds, then show error
+                const elapsed = Date.now() - startTime;
+                const remainingTime = Math.max(0, 2000 - elapsed);
+                
+                setTimeout(() => {
+                    setLockingItems(prev => {
+                        const newSet = new Set(prev);
+                        newSet.delete(itemId);
+                        return newSet;
+                    });
+                    setLockResults(prev => new Map(prev).set(itemId, 'error'));
+                    // Clear error state after 2 seconds
+                    setTimeout(() => {
+                        setLockResults(prev => {
+                            const newMap = new Map(prev);
+                            newMap.delete(itemId);
+                            return newMap;
+                        });
+                    }, 2000);
+                }, remainingTime);
+            }
+        });
+    };
+
+    const handleVerify = (itemId: string) => {
+        setVerifyingItems(prev => new Map(prev).set(itemId, 'loading'));
+        setPendingActions(prev => new Map(prev).set(itemId, 'verify'));
+        
+        const startTime = Date.now();
+        
+        router.post('/firme/verify', { item_id: itemId }, {
+            preserveState: false,
+            preserveScroll: true,
+            onSuccess: () => {
+                // Ensure loading shows for at least 2 seconds, then show success
+                const elapsed = Date.now() - startTime;
+                const remainingTime = Math.max(0, 2000 - elapsed);
+                
+                setTimeout(() => {
+                    setVerifyingItems(prev => new Map(prev).set(itemId, 'success'));
+                    // Clear success state after 2 seconds
+                    setTimeout(() => {
+                        setVerifyingItems(prev => {
+                            const newMap = new Map(prev);
+                            newMap.delete(itemId);
+                            return newMap;
+                        });
+                    }, 2000);
+                }, remainingTime);
+            },
+            onError: () => {
+                // Ensure loading shows for at least 2 seconds, then show error
+                const elapsed = Date.now() - startTime;
+                const remainingTime = Math.max(0, 2000 - elapsed);
+                
+                setTimeout(() => {
+                    setVerifyingItems(prev => new Map(prev).set(itemId, 'error'));
+                    // Clear error state after 2 seconds
+                    setTimeout(() => {
+                        setVerifyingItems(prev => {
+                            const newMap = new Map(prev);
+                            newMap.delete(itemId);
+                            return newMap;
+                        });
+                    }, 2000);
+                }, remainingTime);
             }
         });
     };
@@ -241,15 +416,15 @@ export default function FirmeIndex() {
             <Head title="Firme" />
 
             <div className="flex h-full flex-1 flex-col gap-4 rounded-xl p-4 overflow-x-auto">
-                {/* Flash Messages */}
-                {flash?.success && (
+                {/* Flash Messages - Only show for non-button actions (like approve/reject) */}
+                {flash?.success && !suppressFlashMessages && (
                     <Alert className="border-green-200 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-200">
                         <CheckCircle2 className="h-4 w-4" />
                         <AlertDescription>{flash.success}</AlertDescription>
                     </Alert>
                 )}
 
-                {flash?.error && (
+                {flash?.error && !suppressFlashMessages && (
                     <Alert className="border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
                         <XCircle className="h-4 w-4" />
                         <AlertDescription>{flash.error}</AlertDescription>
@@ -426,21 +601,20 @@ export default function FirmeIndex() {
                                                     />
                                                 </TableCell>
                                                 <TableCell className="py-1 font-mono text-sm truncate" style={{ width: '112px' }}>
-                                                    <div className="relative pl-4">
-                                                        {item.locked && (
-                                                            <Lock className="absolute left-0 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-500 dark:text-gray-400" />
-                                                        )}
-                                                        <span className={`block truncate ${item.locked ? 'text-gray-600 dark:text-gray-300 font-medium' : ''}`}>
-                                                            {item.cui}
-                                                        </span>
-                                                    </div>
+                                                    <span className="block truncate">
+                                                        {item.cui}
+                                                    </span>
                                                 </TableCell>
                                                 <TableCell className="py-1 text-sm" style={{ width: '320px' }}>
-                                                    <div className="truncate">
+                                                    <div className="flex items-center gap-2" style={{ maxWidth: '320px' }}>
+                                                        <Lock className={`h-3 w-3 text-gray-500 dark:text-gray-400 flex-shrink-0 ${item.locked ? 'opacity-100' : 'opacity-0'}`} />
+                                                        {item.source_api === 'vies' && (
+                                                            <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 flex-shrink-0" style={{ fontSize: '10px', lineHeight: '1' }}>VIES</Badge>
+                                                        )}
                                                         {!item.denumire || item.denumire === 'Se încarcă...' ? (
-                                                            <span className="animate-pulse text-muted-foreground">Se încarcă...</span>
+                                                            <span className="animate-pulse text-muted-foreground truncate">Se încarcă...</span>
                                                         ) : (
-                                                            <span title={item.denumire || ''}>{item.denumire}</span>
+                                                            <span title={item.denumire || ''} className={`truncate ${item.locked ? 'text-gray-600 dark:text-gray-300 font-medium' : ''}`}>{item.denumire}</span>
                                                         )}
                                                     </div>
                                                 </TableCell>
@@ -486,14 +660,28 @@ export default function FirmeIndex() {
                                                             <Button
                                                                 size="sm"
                                                                 variant="secondary"
-                                                                onClick={() => {
-                                                                    // Trigger re-verification of company data
-                                                                    router.post('/firme/verify', { item_id: item.id });
-                                                                }}
-                                                                className="h-6 px-2 text-xs"
+                                                                onClick={() => handleVerify(item.id)}
+                                                                disabled={verifyingItems.get(item.id) === 'loading'}
+                                                                className={`h-6 px-2 text-xs w-[80px] flex items-center justify-center gap-1 transition-all duration-300 ${
+                                                                    verifyingItems.get(item.id) === 'success' 
+                                                                        ? 'bg-green-500 hover:bg-green-600 text-white border-green-500' 
+                                                                        : verifyingItems.get(item.id) === 'error'
+                                                                        ? 'bg-red-500 hover:bg-red-600 text-white border-red-500'
+                                                                        : 'hover:bg-blue-50 hover:border-blue-400 hover:text-blue-700'
+                                                                }`}
                                                             >
-                                                                <RefreshCw className="h-3 w-3 mr-1" />
-                                                                Verifică
+                                                                {verifyingItems.get(item.id) === 'loading' ? (
+                                                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                                                ) : verifyingItems.get(item.id) === 'success' ? (
+                                                                    <Check className="h-3 w-3" />
+                                                                ) : verifyingItems.get(item.id) === 'error' ? (
+                                                                    <X className="h-3 w-3" />
+                                                                ) : (
+                                                                    <RefreshCw className="h-3 w-3" />
+                                                                )}
+                                                                {verifyingItems.get(item.id) === 'success' ? 'OK' : 
+                                                                 verifyingItems.get(item.id) === 'error' ? 'Eroare' : 
+                                                                 'Verifică'}
                                                             </Button>
                                                         )}
                                                         
@@ -503,16 +691,30 @@ export default function FirmeIndex() {
                                                             variant="outline"
                                                             onClick={() => item.locked ? handleUnlock(item.id) : handleLock(item.id)}
                                                             disabled={lockingItems.has(item.id)}
-                                                            className={`h-6 px-2 text-xs min-w-[85px] ${item.locked ? 'border-gray-400 text-gray-600 hover:bg-gray-100' : ''}`}
+                                                            className={`h-6 px-2 text-xs w-[110px] flex items-center justify-center gap-1 transition-all duration-300 ${
+                                                                lockResults.get(item.id) === 'success'
+                                                                    ? 'bg-green-500 hover:bg-green-600 text-white border-green-500'
+                                                                    : lockResults.get(item.id) === 'error'
+                                                                    ? 'bg-red-500 hover:bg-red-600 text-white border-red-500'
+                                                                    : item.locked 
+                                                                    ? 'border-gray-400 text-gray-600 hover:bg-orange-50 hover:border-orange-400 hover:text-orange-700' 
+                                                                    : 'hover:bg-gray-50 hover:border-gray-400 hover:text-gray-700'
+                                                            }`}
                                                         >
                                                             {lockingItems.has(item.id) ? (
-                                                                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                                                <Loader2 className="h-3 w-3 animate-spin" />
+                                                            ) : lockResults.get(item.id) === 'success' ? (
+                                                                <Check className="h-3 w-3" />
+                                                            ) : lockResults.get(item.id) === 'error' ? (
+                                                                <X className="h-3 w-3" />
                                                             ) : item.locked ? (
-                                                                <Unlock className="h-3 w-3 mr-1" />
+                                                                <Unlock className="h-3 w-3" />
                                                             ) : (
-                                                                <Lock className="h-3 w-3 mr-1" />
+                                                                <Lock className="h-3 w-3" />
                                                             )}
-                                                            {item.locked ? 'Deblochează' : 'Blochează'}
+                                                            {lockResults.get(item.id) === 'success' ? 'OK' :
+                                                             lockResults.get(item.id) === 'error' ? 'Eroare' :
+                                                             item.locked ? 'Deblochează' : 'Blochează'}
                                                         </Button>
                                                     </div>
                                                 </TableCell>

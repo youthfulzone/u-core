@@ -71,6 +71,7 @@ class Company extends Eloquent
         'vat_number',
         'vat_valid',
         'vies_request_date',
+        'source_api', // 'anaf' or 'vies' - tracks which API was used to fetch company data
     ];
 
     protected $casts = [

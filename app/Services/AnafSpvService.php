@@ -223,6 +223,38 @@ class AnafSpvService
         return $data;
     }
 
+    public function updateRequestStatusFromMessages(): int
+    {
+        $updatedCount = 0;
+
+        // Get all completed requests that haven't received responses yet
+        $completedRequests = \App\Models\Spv\SpvRequest::where('status', \App\Models\Spv\SpvRequest::STATUS_COMPLETED)
+            ->whereNotNull('response_data')
+            ->get();
+
+        foreach ($completedRequests as $request) {
+            if (! isset($request->response_data['id_solicitare'])) {
+                continue;
+            }
+
+            $idSolicitare = $request->response_data['id_solicitare'];
+
+            // Check if there are messages with this id_solicitare
+            $relatedMessages = \App\Models\Spv\SpvMessage::where('id_solicitare', $idSolicitare)->exists();
+
+            if ($relatedMessages) {
+                $request->markAsResponseReceived();
+                $updatedCount++;
+            }
+        }
+
+        if ($updatedCount > 0) {
+            \Illuminate\Support\Facades\Log::info("Updated {$updatedCount} requests to response_received status");
+        }
+
+        return $updatedCount;
+    }
+
     public function getAvailableDocumentTypes(): array
     {
         return [
@@ -302,6 +334,25 @@ class AnafSpvService
 
     private function makeRequest(string $endpoint, array $params = [], ?array $browserCookies = null): Response
     {
+        // Rate limiting: 1 request per 2 seconds for ANAF API
+        $rateLimitKey = 'anaf_api_rate_limit';
+        $lastRequestTime = Cache::get($rateLimitKey);
+        
+        if ($lastRequestTime) {
+            $timeSinceLastRequest = microtime(true) - $lastRequestTime;
+            if ($timeSinceLastRequest < 2.0) {
+                $waitTime = 2.0 - $timeSinceLastRequest;
+                Log::info('ANAF API rate limiting - waiting', [
+                    'wait_time_seconds' => $waitTime,
+                    'endpoint' => $endpoint
+                ]);
+                usleep((int)($waitTime * 1000000)); // Convert to microseconds
+            }
+        }
+        
+        // Store the current request time
+        Cache::put($rateLimitKey, microtime(true), 60); // Cache for 1 minute
+        
         // Get or create API call tracker from cache
         $tracker = $this->getApiTracker();
 

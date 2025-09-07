@@ -8,20 +8,24 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { PlaceholderPattern } from '@/components/ui/placeholder-pattern';
 import { type BreadcrumbItem } from '@/types'
-import { FileText, Send, Clock, CheckCircle, XCircle } from 'lucide-react';
+import { FileText, Send, Clock, CheckCircle, XCircle, Mail } from 'lucide-react';
 
 interface SpvRequest {
     id: string;
     cif: string;
     company_name?: string;
     document_type: string;
-    status: 'pending' | 'completed' | 'failed';
-    user: {
+    status: 'pending' | 'completed' | 'failed' | 'response_received';
+    user?: {
         name: string;
     };
     created_at: string;
     processed_at?: string;
+    response_received_at?: string;
     error_message?: string;
+    response_data?: {
+        id_solicitare?: string;
+    };
 }
 
 interface PaginatedRequests {
@@ -121,12 +125,14 @@ export default function Requests({ requests, availableCifs, documentTypes }: Pro
         })
     }
 
-    const getStatusBadge = (status: string) => {
+    const getStatusBadge = (status: string, request?: SpvRequest) => {
         switch (status) {
             case 'pending':
                 return <Badge variant="secondary" className="flex items-center gap-1"><Clock className="h-3 w-3" />În procesare</Badge>
             case 'completed':
-                return <Badge variant="default" className="flex items-center gap-1 bg-green-600"><CheckCircle className="h-3 w-3" />Finalizat</Badge>
+                return <Badge variant="default" className="flex items-center gap-1 bg-blue-600"><CheckCircle className="h-3 w-3" />Trimis ANAF</Badge>
+            case 'response_received':
+                return <Badge variant="default" className="flex items-center gap-1 bg-green-600"><Mail className="h-3 w-3" />Răspuns disponibil</Badge>
             case 'failed':
                 return <Badge variant="destructive" className="flex items-center gap-1"><XCircle className="h-3 w-3" />Eșuat</Badge>
             default:
@@ -207,26 +213,35 @@ export default function Requests({ requests, availableCifs, documentTypes }: Pro
                                 <Table>
                                     <TableHeader>
                                         <TableRow className="h-8">
+                                            <TableHead className="py-2">ID Solicitare</TableHead>
                                             <TableHead className="py-2">Companie</TableHead>
                                             <TableHead className="py-2">CIF</TableHead>
                                             <TableHead className="py-2">Document</TableHead>
                                             <TableHead className="py-2">Status</TableHead>
                                             <TableHead className="py-2">Utilizator</TableHead>
                                             <TableHead className="py-2">Data cererii</TableHead>
-                                            <TableHead className="py-2">Data procesării</TableHead>
+                                            <TableHead className="py-2">Data răspunsului</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
                                         {requests.data.map((request) => (
                                             <TableRow key={request.id} className="h-10">
+                                                <TableCell className="py-1 font-mono text-xs">
+                                                    {request.response_data?.id_solicitare || '-'}
+                                                </TableCell>
                                                 <TableCell className="py-1 text-sm">{request.company_name || '-'}</TableCell>
                                                 <TableCell className="py-1 font-mono text-sm">{request.cif}</TableCell>
                                                 <TableCell className="py-1 text-sm">{request.document_type}</TableCell>
-                                                <TableCell className="py-1">{getStatusBadge(request.status)}</TableCell>
-                                                <TableCell className="py-1 text-sm">{request.user.name}</TableCell>
-                                                <TableCell className="py-1 text-sm">{new Date(request.created_at).toLocaleString('ro-RO')}</TableCell>
+                                                <TableCell className="py-1">{getStatusBadge(request.status, request)}</TableCell>
+                                                <TableCell className="py-1 text-sm">{request.user?.name || 'N/A'}</TableCell>
                                                 <TableCell className="py-1 text-sm">
-                                                    {request.processed_at ? new Date(request.processed_at).toLocaleString('ro-RO') : '-'}
+                                                    {request.created_at ? new Date(request.created_at).toLocaleString('ro-RO') : '-'}
+                                                </TableCell>
+                                                <TableCell className="py-1 text-sm">
+                                                    {request.response_received_at 
+                                                        ? new Date(request.response_received_at).toLocaleString('ro-RO') 
+                                                        : (request.processed_at ? new Date(request.processed_at).toLocaleString('ro-RO') : '-')
+                                                    }
                                                 </TableCell>
                                             </TableRow>
                                         ))}
