@@ -12,6 +12,8 @@ export interface SpvMessage {
     file_size: number | null
     formatted_date_creare: string
     formatted_downloaded_at: string
+    company_name?: string | null
+    company_source?: string | null
 }
 
 export interface SpvRequest {

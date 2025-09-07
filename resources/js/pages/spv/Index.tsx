@@ -27,7 +27,9 @@ import {
     Wifi,
     WifiOff,
     Zap,
-    AlertCircle
+    AlertCircle,
+    Eye,
+    Check
 } from 'lucide-react'
 
 interface SpvMessage {
@@ -39,6 +41,9 @@ interface SpvMessage {
     tip: string
     downloaded_at: string | null
     formatted_date_creare: string
+    company_name?: string | null
+    company_source?: string | null
+    has_file_in_database?: boolean
 }
 
 interface SpvRequest {
@@ -720,8 +725,50 @@ export default function SpvIndex({
     
     // Removed old sync function - now using browser session authentication only
 
-    const handleDownload = (messageId: string) => {
-        window.open(`/spv/download/${messageId}`, '_blank')
+    const [downloadingStates, setDownloadingStates] = useState<Record<string, 'loading' | 'success' | 'error' | null>>({})
+
+    const handleDownload = async (messageId: string) => {
+        setDownloadingStates(prev => ({ ...prev, [messageId]: 'loading' }))
+        
+        try {
+            const response = await fetch(`/spv/download/${messageId}`, {
+                method: 'GET',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json',
+                },
+            })
+
+            if (response.ok) {
+                const data = await response.json()
+                if (data.success) {
+                    setDownloadingStates(prev => ({ ...prev, [messageId]: 'success' }))
+                    setTimeout(() => {
+                        router.reload({ only: ['messages'] })
+                    }, 1000)
+                } else {
+                    setDownloadingStates(prev => ({ ...prev, [messageId]: 'error' }))
+                    setTimeout(() => {
+                        setDownloadingStates(prev => ({ ...prev, [messageId]: null }))
+                    }, 3000)
+                }
+            } else {
+                setDownloadingStates(prev => ({ ...prev, [messageId]: 'error' }))
+                setTimeout(() => {
+                    setDownloadingStates(prev => ({ ...prev, [messageId]: null }))
+                }, 3000)
+            }
+        } catch (error) {
+            console.error('Download error:', error)
+            setDownloadingStates(prev => ({ ...prev, [messageId]: 'error' }))
+            setTimeout(() => {
+                setDownloadingStates(prev => ({ ...prev, [messageId]: null }))
+            }, 3000)
+        }
+    }
+
+    const handleView = (messageId: string) => {
+        window.open(`/spv/viewer/${messageId}`, '_blank')
     }
 
     const getMessageTypeBadge = (tip: string) => {
@@ -738,16 +785,11 @@ export default function SpvIndex({
         return variants[tip] || 'secondary'
     }
 
-    // Helper function to get mock company name based on CIF
+    // Helper function to get company name from enriched message data
     const getCompanyName = (cif: string): string => {
-        const mockCompanies: Record<string, string> = {
-            '12345678': 'SC EXEMPLU SRL',
-            '87654321': 'COMPANIA DEMO SA',
-            '11223344': 'FIRMA TEST SRL',
-            '44332211': 'SOCIETATEA COMERCIALA SRL',
-            '99887766': 'INTREPRINDEREA PUBLICA SA',
-        }
-        return mockCompanies[cif] || `SC ${cif.substring(0, 4)} SRL`
+        // Find the message with this CIF and return its company name
+        const message = messages.find(m => m.cif === cif);
+        return message?.company_name || `CIF ${cif}`;
     }
 
     // Helper function to get document type display with proper capitalization
@@ -1024,7 +1066,7 @@ export default function SpvIndex({
                                                         paginatedMessages.map((message, index) => (
                                                             <tr 
                                                                 key={message.id} 
-                                                                className={`border-b hover:bg-muted/30 transition-colors duration-200 ease-in-out ${index % 2 === 0 ? 'bg-background' : 'bg-muted/10'}`}
+                                                                className={`border-b hover:bg-muted/30 transition-colors duration-200 ease-in-out ${index % 2 === 0 ? 'bg-background' : 'bg-muted/10'} ${message.downloaded_at && message.has_file_in_database ? 'border-r-4 border-r-green-500' : ''}`}
                                                             >
                                                             <td className="p-4 align-top w-[160px]">
                                                                 <div className="space-y-1">
@@ -1050,15 +1092,46 @@ export default function SpvIndex({
                                                                 </div>
                                                             </td>
                                                             <td className="p-4 align-top w-[90px]">
-                                                                <Button
-                                                                    onClick={() => handleDownload(message.anaf_id)}
-                                                                    size="sm"
-                                                                    variant="outline"
-                                                                    className="w-full text-xs px-1"
-                                                                >
-                                                                    <Icon iconNode={Download} className="w-3 h-3 mr-1" />
-                                                                    Descarcă
-                                                                </Button>
+                                                                {message.downloaded_at && message.has_file_in_database ? (
+                                                                    <Button
+                                                                        onClick={() => handleView(message.anaf_id)}
+                                                                        size="sm"
+                                                                        variant="outline"
+                                                                        className="w-full text-xs px-1"
+                                                                    >
+                                                                        <Icon iconNode={Eye} className="w-3 h-3 mr-1" />
+                                                                        Vizualizează
+                                                                    </Button>
+                                                                ) : (
+                                                                    <Button
+                                                                        onClick={() => handleDownload(message.anaf_id)}
+                                                                        size="sm"
+                                                                        variant="outline"
+                                                                        disabled={downloadingStates[message.anaf_id] === 'loading'}
+                                                                        className={`w-full text-xs px-1 transition-colors ${
+                                                                            downloadingStates[message.anaf_id] === 'success' ? 'bg-green-500 text-white border-green-500' :
+                                                                            downloadingStates[message.anaf_id] === 'error' ? 'bg-red-500 text-white border-red-500' :
+                                                                            ''
+                                                                        }`}
+                                                                    >
+                                                                        {downloadingStates[message.anaf_id] === 'loading' && (
+                                                                            <Icon iconNode={Loader2} className="w-3 h-3 mr-1 animate-spin" />
+                                                                        )}
+                                                                        {downloadingStates[message.anaf_id] === 'success' && (
+                                                                            <Icon iconNode={Check} className="w-3 h-3 mr-1" />
+                                                                        )}
+                                                                        {downloadingStates[message.anaf_id] === 'error' && (
+                                                                            <Icon iconNode={X} className="w-3 h-3 mr-1" />
+                                                                        )}
+                                                                        {!downloadingStates[message.anaf_id] && (
+                                                                            <Icon iconNode={Download} className="w-3 h-3 mr-1" />
+                                                                        )}
+                                                                        {downloadingStates[message.anaf_id] === 'loading' ? 'Se preia...' :
+                                                                         downloadingStates[message.anaf_id] === 'success' ? 'Gata!' :
+                                                                         downloadingStates[message.anaf_id] === 'error' ? 'Eroare' :
+                                                                         'Preia'}
+                                                                    </Button>
+                                                                )}
                                                             </td>
                                                         </tr>
                                                     ))

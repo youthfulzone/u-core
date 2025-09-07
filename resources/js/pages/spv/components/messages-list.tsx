@@ -21,6 +21,16 @@ export default function MessagesList({ messages, onSyncMessages, loading }: Mess
     const [downloadingMessages, setDownloadingMessages] = useState<Set<string>>(new Set())
     const [selectedMessages, setSelectedMessages] = useState<Set<string>>(new Set())
 
+    // Debug: Log first message to check if company_name is present
+    if (messages.length > 0) {
+        console.log('Debug: First message data:', {
+            cif: messages[0].cif,
+            company_name: messages[0].company_name,
+            company_source: messages[0].company_source,
+            has_company_name: 'company_name' in messages[0]
+        });
+    }
+
     const handleDownload = async (messageId: string) => {
         try {
             setDownloadingMessages(prev => new Set(prev).add(messageId))
@@ -242,7 +252,19 @@ export default function MessagesList({ messages, onSyncMessages, loading }: Mess
                                                 {message.tip}
                                             </Badge>
                                             <span className="text-sm text-muted-foreground">
-                                                CIF: {message.cif}
+                                                {message.company_name ? (
+                                                    <>
+                                                        <span className="font-medium text-foreground">{message.company_name}</span>
+                                                        <span className="text-muted-foreground"> (CIF: {message.cif})</span>
+                                                        {message.company_source === 'vies' && (
+                                                            <Badge variant="outline" className="ml-2 text-blue-600 border-blue-300">
+                                                                VIES
+                                                            </Badge>
+                                                        )}
+                                                    </>
+                                                ) : (
+                                                    <>CIF: {message.cif}</>
+                                                )}
                                             </span>
                                             {message.downloaded_at && (
                                                 <Badge variant="outline" className="text-green-600">

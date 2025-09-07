@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Spv;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Spv\DocumentRequestRequest;
 use App\Http\Requests\Spv\MessagesListRequest;
+use App\Models\Company;
 use App\Models\Spv\SpvMessage;
 use App\Models\Spv\SpvRequest;
 use App\Services\AnafCompanyService;
@@ -33,7 +34,24 @@ class SpvController extends Controller
             ->recent(60)
             ->orderBy('data_creare', 'desc')
             ->limit(50)
-            ->get();
+            ->get()
+            ->map(function ($message) {
+                return $message->append(['has_file_in_database']);
+            });
+
+        // Enrich messages with company names from Firme database
+        $messages = $this->enrichMessagesWithCompanyNames($messages);
+        
+        // Debug: Log first message data to verify enrichment
+        if ($messages->isNotEmpty()) {
+            $firstMessage = $messages->first();
+            Log::info('Debug: First message data', [
+                'cif' => $firstMessage->cif,
+                'company_name' => $firstMessage->company_name ?? 'null',
+                'company_source' => $firstMessage->company_source ?? 'null',
+                'has_company_name' => isset($firstMessage->company_name),
+            ]);
+        }
 
         $requests = SpvRequest::forUser((string) $user->id)
             ->orderBy('created_at', 'desc')
@@ -214,74 +232,81 @@ class SpvController extends Controller
                 ->where('user_id', (string) $user->id)
                 ->firstOrFail();
 
-            // Check if user already has this file downloaded and cached
-            if ($message->isDownloaded() && $message->file_path && Storage::disk('local')->exists($message->file_path)) {
-                Log::info('Serving cached file', [
+            // Check if file is already stored in MongoDB database (atomic storage)
+            if ($message->hasFileInDatabase()) {
+                Log::info('Serving file from MongoDB database', [
                     'message_id' => $messageId,
-                    'file_path' => $message->file_path,
+                    'file_name' => $message->getFileName(),
                     'file_size' => $message->file_size,
                 ]);
 
-                $cachedContent = Storage::disk('local')->get($message->file_path);
-                $cachedFilename = basename($message->file_path);
-                $contentType = str_ends_with($cachedFilename, '.pdf') ? 'application/pdf' : 'application/octet-stream';
+                $content = $message->getFileContent();
+                $fileName = $message->getFileName();
+                $contentType = $message->content_type ?: 'application/pdf';
 
-                return response($cachedContent)
-                    ->header('Content-Type', $contentType)
-                    ->header('Content-Disposition', "attachment; filename=\"{$cachedFilename}\"")
-                    ->header('X-File-Source', 'cached');
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Fișierul este deja disponibil pentru vizualizare.',
+                    'stored_in_db' => true,
+                ]);
             }
 
-            // Download fresh from ANAF
-            Log::info('Downloading fresh from ANAF', ['message_id' => $messageId]);
+            // Check if user already has this file downloaded and cached on disk
+            if ($message->isDownloaded() && $message->file_path && Storage::disk('local')->exists($message->file_path)) {
+                Log::info('Migrating cached file to MongoDB', [
+                    'message_id' => $messageId,
+                    'file_path' => $message->file_path,
+                ]);
+
+                $cachedContent = Storage::disk('local')->get($message->file_path);
+                $contentType = str_ends_with($message->file_path, '.pdf') ? 'application/pdf' : 'application/octet-stream';
+
+                // Store in MongoDB and remove from disk
+                $message->storeFileInDatabase($cachedContent, $user->id, $contentType);
+                Storage::disk('local')->delete($message->file_path);
+
+                $fileName = $message->getFileName();
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Fișierul a fost migrat în baza de date și este disponibil pentru vizualizare.',
+                    'stored_in_db' => true,
+                ]);
+            }
+
+            // Download fresh from ANAF and store atomically in MongoDB
+            Log::info('Downloading fresh from ANAF for MongoDB storage', ['message_id' => $messageId]);
             $response = $this->spvService->downloadMessage($messageId);
 
             $contentType = $response->header('Content-Type', 'application/octet-stream');
-            $contentLength = strlen($response->body());
+            $fileContent = $response->body();
 
-            // Determine file extension based on content type and content
-            $extension = '.bin'; // default
-            $filename = "message_{$messageId}_".now()->format('Y-m-d_H-i-s');
-
-            if (str_contains($contentType, 'application/pdf')) {
-                $extension = '.pdf';
-            } elseif (str_starts_with($response->body(), '%PDF')) {
-                // PDF magic number detection
-                $extension = '.pdf';
+            // Detect content type
+            if (str_contains($contentType, 'application/pdf') || str_starts_with($fileContent, '%PDF')) {
                 $contentType = 'application/pdf';
             } elseif (str_contains($contentType, 'application/xml') || str_contains($contentType, 'text/xml')) {
-                $extension = '.xml';
+                $contentType = 'application/xml';
             } elseif (str_contains($contentType, 'text/html')) {
-                $extension = '.html';
+                $contentType = 'text/html';
             }
 
-            $filename .= $extension;
-            $filePath = "spv/downloads/{$user->id}/{$filename}";
+            // Store file content directly in MongoDB (atomic operation)
+            $message->storeFileInDatabase($fileContent, $user->id, $contentType);
+            $fileName = $message->getFileName();
 
-            // Ensure directory exists
-            $directory = dirname($filePath);
-            if (! Storage::disk('local')->exists($directory)) {
-                Storage::disk('local')->makeDirectory($directory);
-            }
-
-            // Store file
-            Storage::disk('local')->put($filePath, $response->body());
-
-            // Mark message as downloaded
-            $message->markAsDownloaded($user->id, $filePath, $contentLength);
-
-            Log::info('Download completed successfully', [
+            Log::info('Download completed and stored in MongoDB', [
                 'message_id' => $messageId,
-                'filename' => $filename,
-                'file_size' => $contentLength,
+                'file_name' => $fileName,
+                'file_size' => strlen($fileContent),
                 'content_type' => $contentType,
             ]);
 
-            return response($response->body())
-                ->header('Content-Type', $contentType)
-                ->header('Content-Disposition', "attachment; filename=\"{$filename}\"")
-                ->header('Content-Length', (string) $contentLength)
-                ->header('X-File-Source', 'fresh');
+            return response()->json([
+                'success' => true,
+                'message' => 'Fișierul a fost descărcat și stocat în baza de date pentru vizualizare.',
+                'stored_in_db' => true,
+                'file_name' => $fileName,
+            ]);
 
         } catch (\Exception $e) {
             Log::error('Download failed', [
@@ -765,6 +790,154 @@ class SpvController extends Controller
                 'success' => false,
                 'message' => 'Failed to reset API counter',
             ], 500);
+        }
+    }
+
+    /**
+     * Efficiently enrich SPV messages with company names from Firme database
+     */
+    private function enrichMessagesWithCompanyNames($messages)
+    {
+        // Extract all unique CUIs from messages
+        $allCuis = collect();
+        
+        foreach ($messages as $message) {
+            // Get CUI from the message CIF field, clean and normalize it
+            if (!empty($message->cif)) {
+                $cleanCif = preg_replace('/[^0-9]/', '', trim($message->cif));
+                if (!empty($cleanCif)) {
+                    $allCuis->push($cleanCif);
+                }
+            }
+            
+            // Also get CUIs from cui_list if available
+            if (!empty($message->cui_list) && is_array($message->cui_list)) {
+                foreach ($message->cui_list as $cui) {
+                    $cleanCui = preg_replace('/[^0-9]/', '', trim($cui));
+                    if (!empty($cleanCui)) {
+                        $allCuis->push($cleanCui);
+                    }
+                }
+            }
+        }
+        
+        // Get unique, valid CUIs (6-9 digits)
+        $validCuis = $allCuis
+            ->filter(fn($cui) => !empty($cui) && preg_match('/^[0-9]{6,9}$/', $cui))
+            ->unique()
+            ->values()
+            ->toArray();
+            
+        // Bulk lookup company names from Firme database
+        $companyNames = collect();
+        if (!empty($validCuis)) {
+            $companies = Company::whereIn('cui', $validCuis)
+                ->select('cui', 'denumire', 'source_api')
+                ->get();
+                
+            $companyNames = $companies->keyBy('cui');
+        }
+        
+        // Enrich each message with company name
+        foreach ($messages as $message) {
+            $cleanCif = preg_replace('/[^0-9]/', '', trim($message->cif ?? ''));
+            
+            if (!empty($cleanCif) && $companyNames->has($cleanCif)) {
+                $company = $companyNames->get($cleanCif);
+                $message->company_name = $company->denumire;
+                $message->company_source = $company->source_api;
+            } else {
+                $message->company_name = null;
+                $message->company_source = null;
+            }
+        }
+        
+        return $messages;
+    }
+
+    /**
+     * View file stored in MongoDB directly in browser
+     */
+    public function viewFile(Request $request, string $messageId): Response
+    {
+        try {
+            $user = Auth::user();
+            
+            $message = SpvMessage::where('anaf_id', $messageId)
+                ->where('user_id', (string) $user->id)
+                ->firstOrFail();
+
+            // Check if file is stored in MongoDB
+            if (!$message->hasFileInDatabase()) {
+                abort(404, 'File not found in database');
+            }
+
+            $content = $message->getFileContent();
+            $contentType = $message->content_type ?: 'application/pdf';
+            $fileName = $message->getFileName();
+
+            Log::info('Serving file for inline view from MongoDB', [
+                'message_id' => $messageId,
+                'file_name' => $fileName,
+                'content_type' => $contentType,
+                'file_size' => strlen($content),
+            ]);
+
+            return response($content)
+                ->header('Content-Type', $contentType)
+                ->header('Content-Disposition', 'inline; filename="' . $fileName . '"')
+                ->header('Content-Length', (string) strlen($content));
+
+        } catch (\Exception $e) {
+            Log::error('File view failed', [
+                'message_id' => $messageId,
+                'user_id' => $user->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+
+            abort(500, 'Failed to load file');
+        }
+    }
+
+    /**
+     * Show in-app file viewer page
+     */
+    public function showViewer(Request $request, string $messageId)
+    {
+        try {
+            $user = Auth::user();
+            
+            $message = SpvMessage::where('anaf_id', $messageId)
+                ->where('user_id', (string) $user->id)
+                ->firstOrFail();
+
+            // Check if file is stored in MongoDB
+            if (!$message->hasFileInDatabase()) {
+                return redirect()->route('spv.index')->with('error', 'Fișierul nu este disponibil pentru vizualizare');
+            }
+
+            return Inertia::render('spv/Viewer', [
+                'message' => [
+                    'id' => $message->id,
+                    'anaf_id' => $message->anaf_id,
+                    'detalii' => $message->detalii,
+                    'cif' => $message->cif,
+                    'tip' => $message->tip,
+                    'file_name' => $message->getFileName(),
+                    'file_size' => $message->file_size,
+                    'content_type' => $message->content_type ?: 'application/pdf',
+                    'formatted_date_creare' => $message->getFormattedDateCreareAttribute(),
+                ],
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('File viewer page failed', [
+                'message_id' => $messageId,
+                'user_id' => $user->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+
+            return redirect()->route('spv.index')->with('error', 'Eroare la încărcarea vizualizatorului');
         }
     }
 }

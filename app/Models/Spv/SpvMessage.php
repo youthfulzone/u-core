@@ -25,6 +25,9 @@ class SpvMessage extends Model
         'downloaded_by',
         'file_path',
         'file_size',
+        'file_content',
+        'file_name',
+        'content_type',
         'original_data',
     ];
 
@@ -68,6 +71,53 @@ class SpvMessage extends Model
         ]);
     }
 
+    /**
+     * Store file content directly in MongoDB (atomic operation)
+     */
+    public function storeFileInDatabase(string $fileContent, int|string $userId, string $contentType = 'application/pdf'): void
+    {
+        // Generate intelligent filename
+        $fileName = \App\Services\SpvFileNameService::generateFullFileName($this->detalii, $this->cif);
+        
+        $this->update([
+            'downloaded_at' => now(),
+            'downloaded_by' => (string) $userId,
+            'file_content' => base64_encode($fileContent), // Store as base64 for MongoDB compatibility
+            'file_name' => $fileName,
+            'file_size' => strlen($fileContent),
+            'content_type' => $contentType,
+            'file_path' => null, // Clear old file path since we're storing in DB
+        ]);
+    }
+
+    /**
+     * Get file content from database
+     */
+    public function getFileContent(): ?string
+    {
+        if (empty($this->file_content)) {
+            return null;
+        }
+        
+        return base64_decode($this->file_content);
+    }
+
+    /**
+     * Check if file is stored in database
+     */
+    public function hasFileInDatabase(): bool
+    {
+        return !empty($this->file_content);
+    }
+
+    /**
+     * Get filename with proper extension
+     */
+    public function getFileName(): string
+    {
+        return $this->file_name ?: \App\Services\SpvFileNameService::generateFullFileName($this->detalii, $this->cif);
+    }
+
     public function scopeForUser($query, int|string $userId)
     {
         return $query->where('user_id', (string) $userId);
@@ -91,5 +141,13 @@ class SpvMessage extends Model
     public function scopeNotDownloaded($query)
     {
         return $query->whereNull('downloaded_at');
+    }
+
+    /**
+     * Accessor for has_file_in_database attribute
+     */
+    public function getHasFileInDatabaseAttribute(): bool
+    {
+        return $this->hasFileInDatabase();
     }
 }
