@@ -9,6 +9,9 @@ class CloudflaredService
 {
     private string $executablePath;
     private string $workingDirectory;
+    private static $statusCache = null;
+    private static $cacheTime = 0;
+    private const CACHE_DURATION = 30; // Cache for 30 seconds
 
     public function __construct()
     {
@@ -18,8 +21,51 @@ class CloudflaredService
 
     public function isRunning(): bool
     {
-        $output = shell_exec('tasklist /FI "IMAGENAME eq cloudflared.exe" 2>NUL');
+        // Use cached result if available and fresh
+        if (self::$statusCache !== null && (time() - self::$cacheTime) < self::CACHE_DURATION) {
+            return self::$statusCache;
+        }
+        
+        // Multiple check approaches for better reliability
+        
+        // 1. Check if process is running
+        $processRunning = $this->checkProcess();
+        
+        // 2. If process is running, verify tunnel is actually accessible
+        $result = false;
+        if ($processRunning) {
+            $result = $this->verifyTunnelAccess();
+        }
+        
+        // Cache the result
+        self::$statusCache = $result;
+        self::$cacheTime = time();
+        
+        return $result;
+    }
+    
+    private function checkProcess(): bool
+    {
+        $output = shell_exec('tasklist /FI "IMAGENAME eq cloudflared.exe" /FO CSV 2>NUL');
         return $output && strpos($output, 'cloudflared.exe') !== false;
+    }
+    
+    private function verifyTunnelAccess(): bool
+    {
+        // Quick check if tunnel URL is accessible
+        $context = stream_context_create([
+            'http' => [
+                'timeout' => 2,
+                'method' => 'HEAD'
+            ]
+        ]);
+        
+        try {
+            $headers = @get_headers('https://efactura.scyte.ro', false, $context);
+            return $headers && strpos($headers[0], '200') !== false;
+        } catch (\Exception $e) {
+            return false;
+        }
     }
 
     public function start(): bool

@@ -97,14 +97,14 @@ export default function Index({
             
             <div className="flex h-full flex-1 flex-col gap-4 rounded-xl p-4">
                 <div className="flex items-center justify-between">
-                    <div>
-                        <h1 className="text-2xl font-bold">e-Facturi</h1>
-                        <p className="text-sm text-muted-foreground">ANAF electronic invoices</p>
-                    </div>
-                    
-                    {/* Minimal status indicators */}
-                    <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-4">
+                        <div>
+                            <h1 className="text-2xl font-bold">e-Facturi</h1>
+                            <p className="text-sm text-muted-foreground">ANAF electronic invoices</p>
+                        </div>
+                        
+                        {/* Move tunnel status to left side near title */}
+                        <div className="flex items-center gap-1 ml-6">
                             {status.tunnelRunning ? (
                                 <Wifi className="h-4 w-4 text-green-600" />
                             ) : (
@@ -112,15 +112,16 @@ export default function Index({
                             )}
                             <span className="text-xs text-muted-foreground">Tunnel</span>
                         </div>
-                        
-                        <div className="flex items-center gap-1">
-                            {status.hasValidToken ? (
-                                <CheckCircle className="h-4 w-4 text-green-600" />
-                            ) : (
-                                <XCircle className="h-4 w-4 text-red-600" />
-                            )}
-                            <span className="text-xs text-muted-foreground">Auth</span>
-                        </div>
+                    </div>
+                    
+                    {/* Keep auth status on the right */}
+                    <div className="flex items-center gap-1">
+                        {status.hasValidToken ? (
+                            <CheckCircle className="h-4 w-4 text-green-600" />
+                        ) : (
+                            <XCircle className="h-4 w-4 text-red-600" />
+                        )}
+                        <span className="text-xs text-muted-foreground">Auth</span>
                     </div>
                 </div>
 
