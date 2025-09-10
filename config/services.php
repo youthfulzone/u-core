@@ -39,4 +39,10 @@ return [
         'bearer_token' => env('TARGETARE_BEARER_TOKEN'),
     ],
 
+    'cloudflared' => [
+        'auto_start' => env('CLOUDFLARED_AUTO_START', true),
+        'tunnel_url' => env('CLOUDFLARED_TUNNEL_URL', 'https://efactura.scyte.ro'),
+        'executable_path' => env('CLOUDFLARED_PATH', base_path('cloudflared/cloudflared.exe')),
+    ],
+
 ];

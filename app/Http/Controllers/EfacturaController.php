@@ -6,6 +6,7 @@ use App\Models\AnafCredential;
 use App\Models\EfacturaToken;
 use App\Services\AnafOAuthService;
 use App\Services\EfacturaApiService;
+use App\Services\CloudflaredService;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Log;
@@ -14,11 +15,15 @@ class EfacturaController extends Controller
 {
     public function __construct(
         private AnafOAuthService $oauthService,
-        private EfacturaApiService $apiService
+        private EfacturaApiService $apiService,
+        private CloudflaredService $cloudflaredService
     ) {}
 
     public function index()
     {
+        // Ensure cloudflared is running
+        $this->cloudflaredService->ensureRunning();
+        
         $credential = AnafCredential::active()->first();
         $token = $credential ? EfacturaToken::forClientId($credential->client_id)->active()->first() : null;
 
@@ -26,12 +31,15 @@ class EfacturaController extends Controller
             'hasCredentials' => (bool) $credential,
             'hasValidToken' => $token && $token->isValid(),
             'tokenExpiresAt' => $token?->expires_at?->toISOString(),
-            'cloudflaredStatus' => $this->getCloudflaredStatus()
+            'cloudflaredStatus' => $this->cloudflaredService->getStatus()
         ]);
     }
 
     public function authenticate()
     {
+        // Ensure cloudflared is running before OAuth
+        $this->cloudflaredService->ensureRunning();
+        
         $credential = AnafCredential::active()->first();
 
         if (!$credential) {
@@ -95,7 +103,7 @@ class EfacturaController extends Controller
             'hasCredentials' => (bool) $credential,
             'hasValidToken' => $token && $token->isValid(),
             'tokenExpiresAt' => $token?->expires_at?->toISOString(),
-            'cloudflaredStatus' => $this->getCloudflaredStatus()
+            'cloudflaredStatus' => $this->cloudflaredService->getStatus()
         ]);
     }
 
@@ -110,52 +118,4 @@ class EfacturaController extends Controller
         }
     }
 
-    private function getCloudflaredStatus(): array
-    {
-        $status = [
-            'running' => false,
-            'tunnel_url' => null,
-            'callback_url' => null,
-            'message' => 'Cloudflared tunnel not detected',
-            'required' => true,
-            'setup_command' => null
-        ];
-
-        // Check if cloudflared.exe exists
-        $cloudflaredPath = base_path('cloudflared/cloudflared.exe');
-        if (!file_exists($cloudflaredPath)) {
-            $status['message'] = 'Cloudflared executable not found';
-            return $status;
-        }
-
-        // Check if cloudflared process is running (Windows)
-        $output = shell_exec('tasklist /FI "IMAGENAME eq cloudflared.exe" 2>NUL');
-        
-        if ($output && strpos($output, 'cloudflared.exe') !== false) {
-            $status['running'] = true;
-            $status['tunnel_url'] = 'https://efactura.scyte.ro';
-            $status['callback_url'] = 'https://efactura.scyte.ro/efactura/oauth/callback';
-            $status['message'] = 'Tunnel active - OAuth ready';
-            
-            // Test if the tunnel is actually accessible
-            try {
-                $response = @file_get_contents('https://efactura.scyte.ro', false, stream_context_create([
-                    'http' => ['timeout' => 3]
-                ]));
-                
-                if ($response === false) {
-                    $status['message'] = 'Tunnel process running but not accessible';
-                    $status['running'] = false;
-                }
-            } catch (\Exception $e) {
-                $status['message'] = 'Tunnel process running but not accessible';
-                $status['running'] = false;
-            }
-        } else {
-            $status['message'] = 'Tunnel not running - OAuth will fail';
-            $status['setup_command'] = 'cd cloudflared && python e.py';
-        }
-
-        return $status;
-    }
 }

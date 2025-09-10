@@ -65,11 +65,6 @@ export default function Index({
     };
 
     const handleAuthenticate = async () => {
-        if (!status.cloudflaredStatus.running) {
-            alert('Cloudflared tunnel must be running for OAuth to work. Please start the tunnel first.');
-            return;
-        }
-
         setLoading(true);
         try {
             const response = await fetch('/efactura/authenticate', { method: 'POST' });
@@ -156,22 +151,12 @@ export default function Index({
                     </Button>
                 </div>
 
-                {/* Cloudflared Status Alert */}
+                {/* Show tunnel status for informational purposes only */}
                 {!status.cloudflaredStatus.running && (
-                    <Alert variant="destructive">
+                    <Alert>
                         <AlertCircle className="h-4 w-4" />
-                        <AlertDescription className="space-y-2">
-                            <div>
-                                <strong>Cloudflared tunnel required:</strong> {status.cloudflaredStatus.message}
-                            </div>
-                            {status.cloudflaredStatus.setup_command && (
-                                <div className="flex items-center gap-2 mt-2">
-                                    <Terminal className="h-4 w-4" />
-                                    <code className="bg-muted px-2 py-1 rounded text-sm">
-                                        {status.cloudflaredStatus.setup_command}
-                                    </code>
-                                </div>
-                            )}
+                        <AlertDescription>
+                            <strong>Laravel is starting the tunnel automatically.</strong> OAuth callbacks will be available momentarily.
                         </AlertDescription>
                     </Alert>
                 )}
@@ -219,7 +204,7 @@ export default function Index({
                                 {!status.hasValidToken ? (
                                     <Button 
                                         onClick={handleAuthenticate}
-                                        disabled={loading || !status.cloudflaredStatus.running}
+                                        disabled={loading}
                                         className="w-full gap-2"
                                     >
                                         <Play className="h-4 w-4" />
@@ -240,56 +225,42 @@ export default function Index({
                         </CardContent>
                     </Card>
 
-                    {/* Cloudflared Status */}
+                    {/* System Status */}
                     <Card>
                         <CardHeader>
                             <CardTitle className="flex items-center gap-2">
                                 <cloudflaredStatusInfo.icon className="h-5 w-5" />
-                                Cloudflared Tunnel
+                                System Status
                             </CardTitle>
                             <CardDescription>
-                                Required for OAuth callback from ANAF
+                                Laravel automatically manages OAuth infrastructure
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
                             <div className="flex items-center justify-between">
-                                <span>Status:</span>
+                                <span>Tunnel:</span>
                                 <Badge variant={cloudflaredStatusInfo.color}>
-                                    {cloudflaredStatusInfo.text}
+                                    {status.cloudflaredStatus.running ? 'Active' : 'Starting...'}
                                 </Badge>
                             </div>
                             
-                            <div className="space-y-2">
+                            {status.cloudflaredStatus.tunnel_url && (
                                 <div className="flex items-center justify-between">
-                                    <span>Message:</span>
-                                    <span className="text-sm text-muted-foreground text-right max-w-48">
-                                        {status.cloudflaredStatus.message}
-                                    </span>
+                                    <span>Public URL:</span>
+                                    <a 
+                                        href={status.cloudflaredStatus.tunnel_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-sm text-blue-600 hover:underline flex items-center gap-1"
+                                    >
+                                        efactura.scyte.ro
+                                        <ExternalLink className="h-3 w-3" />
+                                    </a>
                                 </div>
-                                
-                                {status.cloudflaredStatus.tunnel_url && (
-                                    <div className="flex items-center justify-between">
-                                        <span>Tunnel URL:</span>
-                                        <a 
-                                            href={status.cloudflaredStatus.tunnel_url}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="text-sm text-blue-600 hover:underline flex items-center gap-1"
-                                        >
-                                            efactura.scyte.ro
-                                            <ExternalLink className="h-3 w-3" />
-                                        </a>
-                                    </div>
-                                )}
-                                
-                                {status.cloudflaredStatus.callback_url && (
-                                    <div className="flex items-center justify-between">
-                                        <span>Callback URL:</span>
-                                        <span className="text-sm text-muted-foreground">
-                                            /efactura/oauth/callback
-                                        </span>
-                                    </div>
-                                )}
+                            )}
+                            
+                            <div className="text-xs text-muted-foreground">
+                                OAuth callbacks are automatically configured and managed by Laravel.
                             </div>
                         </CardContent>
                     </Card>
