@@ -20,10 +20,10 @@ class EfacturaApiService
 
     public function uploadInvoice(string $cui, string $xmlContent, string $filename = null): array
     {
-        $token = $this->oauthService->getValidToken($cui);
+        $token = $this->oauthService->getValidToken();
 
         if (!$token) {
-            throw new \Exception("No valid token found for CUI: {$cui}");
+            throw new \Exception("No valid token found. Please authenticate first.");
         }
 
         $baseUrl = $this->environment === 'production' 
@@ -49,9 +49,10 @@ class EfacturaApiService
         $responseData = $response->json();
 
         // Store the invoice record
+        $company = \App\Models\Company::where('cui', $cui)->first();
         EfacturaInvoice::create([
             'cui' => $cui,
-            'company_id' => $token->company_id,
+            'company_id' => $company?->_id,
             'invoice_id' => $responseData['invoice_id'] ?? null,
             'upload_index' => $responseData['upload_index'] ?? null,
             'xml_content' => $xmlContent,
@@ -68,10 +69,10 @@ class EfacturaApiService
 
     public function getUploadState(string $cui, string $uploadIndex): array
     {
-        $token = $this->oauthService->getValidToken($cui);
+        $token = $this->oauthService->getValidToken();
 
         if (!$token) {
-            throw new \Exception("No valid token found for CUI: {$cui}");
+            throw new \Exception("No valid token found. Please authenticate first.");
         }
 
         $baseUrl = $this->environment === 'production' 
@@ -114,10 +115,10 @@ class EfacturaApiService
 
     public function downloadInvoice(string $cui, string $invoiceId): array
     {
-        $token = $this->oauthService->getValidToken($cui);
+        $token = $this->oauthService->getValidToken();
 
         if (!$token) {
-            throw new \Exception("No valid token found for CUI: {$cui}");
+            throw new \Exception("No valid token found. Please authenticate first.");
         }
 
         $baseUrl = $this->environment === 'production' 
@@ -149,10 +150,10 @@ class EfacturaApiService
 
     public function getInvoiceList(string $cui, array $filters = []): array
     {
-        $token = $this->oauthService->getValidToken($cui);
+        $token = $this->oauthService->getValidToken();
 
         if (!$token) {
-            throw new \Exception("No valid token found for CUI: {$cui}");
+            throw new \Exception("No valid token found. Please authenticate first.");
         }
 
         $baseUrl = $this->environment === 'production' 

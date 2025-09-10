@@ -62,7 +62,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::delete('firme/clear-all', [\App\Http\Controllers\FirmeController::class, 'clearAllCompanies'])
         ->name('firme.clear-all');
 
-    // ANAF routes removed - authentication handled directly in SPV
+    // E-factura routes
+    Route::prefix('efactura')->name('efactura.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\EfacturaController::class, 'index'])->name('index');
+        Route::post('/authenticate', [\App\Http\Controllers\EfacturaController::class, 'authenticate'])->name('authenticate');
+        Route::get('/status', [\App\Http\Controllers\EfacturaController::class, 'status'])->name('status');
+        Route::post('/revoke', [\App\Http\Controllers\EfacturaController::class, 'revoke'])->name('revoke');
+    });
 });
 
 // ANAF Browser Session API Routes
@@ -106,6 +112,10 @@ Route::get('/anaf/cookie-helper', function () {
 // Extension API endpoint (needs to be outside middleware)
 Route::post('/api/anaf/extension-cookies', [AnafBrowserSessionController::class, 'receiveExtensionCookies'])
     ->name('anaf.extension.cookies');
+
+// E-factura OAuth callback - MUST be accessible via cloudflared tunnel
+Route::get('/efactura/oauth/callback', [\App\Http\Controllers\EfacturaController::class, 'callback'])
+    ->name('efactura.oauth.callback');
 
 // Test VIES API (temporary route for testing)
 Route::get('/test-vies/{cui?}', function ($cui = '23681054') {
