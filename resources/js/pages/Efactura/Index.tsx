@@ -66,12 +66,21 @@ export default function Index({
 
     const handleAuthenticate = async () => {
         setLoading(true);
+        
         try {
-            const response = await fetch('/efactura/authenticate', { method: 'POST' });
+            const response = await fetch('/efactura/authenticate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement)?.content || ''
+                }
+            });
+            
             const data = await response.json();
             
             if (data.auth_url) {
-                // Open OAuth URL in new window
                 window.open(data.auth_url, '_blank');
                 
                 // Start polling for status updates
@@ -88,6 +97,8 @@ export default function Index({
                     clearInterval(pollInterval);
                     setLoading(false);
                 }, 300000);
+            } else {
+                setLoading(false);
             }
         } catch (error) {
             console.error('Authentication failed:', error);
@@ -100,7 +111,15 @@ export default function Index({
         
         setLoading(true);
         try {
-            await fetch('/efactura/revoke', { method: 'POST' });
+            await fetch('/efactura/revoke', { 
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement)?.content || ''
+                }
+            });
             await refreshStatus();
         } catch (error) {
             console.error('Failed to revoke token:', error);
