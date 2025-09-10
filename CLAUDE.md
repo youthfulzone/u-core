@@ -117,6 +117,38 @@ protected function isAccessible(User $user, ?string $path = null): bool
 - The application is served by Laravel Herd and will be available at: https?://[kebab-case-project-dir].test. Use the `get-absolute-url` tool to generate URLs for the user to ensure valid URLs.
 - You must not run any commands to make the site available via HTTP(s). It is _always_ available through Laravel Herd.
 
+## MongoDB CLI Fix (CRITICAL - READ THIS FIRST)
+
+### The Problem
+MongoDB extension doesn't load in CLI commands, showing error: "Class MongoDB\Driver\Manager not found"
+
+### The Solution
+This site is isolated to PHP 8.3 with MongoDB properly configured. For ALL CLI commands, use:
+
+```bash
+# Instead of: php artisan command
+# Use: C:/Users/TheOldBuffet/.config/herd/bin/php83.bat artisan command
+```
+
+### Quick Reference
+- **MongoDB Host:** 127.0.0.1
+- **MongoDB Port:** 27017  
+- **Database:** admin_database
+- **PHP Version:** 8.3 (site is isolated)
+- **MongoDB Extension:** Loaded in PHP 8.3
+
+### Verification Commands
+```bash
+# Check MongoDB extension
+C:/Users/TheOldBuffet/.config/herd/bin/php83.bat -m | grep -i mongo
+
+# Run artisan commands
+C:/Users/TheOldBuffet/.config/herd/bin/php83.bat artisan [command]
+```
+
+### Alternative: Use Laravel Boost Tools
+The `mcp__laravel-boost__tinker` tool automatically uses the correct PHP version and has MongoDB working.
+
 
 === inertia-laravel/core rules ===
 
@@ -350,4 +382,34 @@ export default function Edit() {
 
 - Every change must be programmatically tested. Write a new test or update an existing test, then run the affected tests to make sure they pass.
 - Run the minimum number of tests needed to ensure code quality and speed. Use `php artisan test` with a specific filename or filter.
+
+=== CRITICAL BACKUP RULES ===
+
+## MANDATORY BACKUP STRATEGY (NEVER SKIP THIS)
+
+### Before ANY file creation or modification:
+1. **ALWAYS commit changes incrementally** - Never let more than 3-5 files remain uncommitted
+2. **Create descriptive commit messages** explaining what was added/changed
+3. **Use git add and commit after each logical group of changes**
+4. **NEVER use git clean -fd or similar destructive commands** without explicit user permission
+5. **Backup before major changes** - Use git stash or branches for experimental work
+
+### Git Workflow Rules:
+- **After creating 3-5 new files:** Immediately commit with descriptive message
+- **After modifying existing functionality:** Commit the changes immediately  
+- **Before starting new features:** Create a feature branch if it's complex
+- **Before any cleanup operations:** Ask user explicit permission and explain what will be lost
+- **When in doubt:** Commit early and often - it's better to have too many commits than lose work
+
+### Recovery Strategy:
+- **Multiple commit points** allow rolling back to any previous state
+- **Each commit should be functional** - don't commit broken code
+- **Tag important milestones** for easy recovery
+- **Document what each commit adds** in the commit message
+
+### NEVER DO THESE WITHOUT USER PERMISSION:
+- `git clean -fd` (removes untracked files - EXTREMELY DANGEROUS)
+- `git reset --hard` (loses uncommitted changes)
+- `git checkout -- .` (discards all changes)
+- Any operation that permanently deletes uncommitted work
 </laravel-boost-guidelines>
