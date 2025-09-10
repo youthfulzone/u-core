@@ -27,7 +27,8 @@ class EfacturaController extends Controller
         return Inertia::render('Efactura/Index', [
             'hasCredentials' => (bool) $credential,
             'hasValidToken' => $token && $token->isValid(),
-            'tokenExpiresAt' => $token?->expires_at?->toISOString()
+            'tokenExpiresAt' => $token?->expires_at?->toISOString(),
+            'tunnelRunning' => $this->cloudflaredService->isRunning()
         ]);
     }
 

@@ -9,39 +9,24 @@ interface EfacturaIndexProps {
     hasCredentials: boolean;
     hasValidToken: boolean;
     tokenExpiresAt?: string;
+    tunnelRunning: boolean;
 }
 
 export default function Index({ 
     hasCredentials, 
     hasValidToken, 
-    tokenExpiresAt
+    tokenExpiresAt,
+    tunnelRunning
 }: EfacturaIndexProps) {
     const [status, setStatus] = useState({
         hasCredentials,
         hasValidToken,
         tokenExpiresAt,
-        tunnelRunning: null as boolean | null
+        tunnelRunning
     });
     const [loading, setLoading] = useState(false);
 
-    useEffect(() => {
-        // Load real status after page renders
-        const loadStatus = async () => {
-            try {
-                const response = await fetch('/efactura/status');
-                const data = await response.json();
-                setStatus({
-                    hasCredentials: data.hasCredentials,
-                    hasValidToken: data.hasValidToken,
-                    tokenExpiresAt: data.tokenExpiresAt,
-                    tunnelRunning: data.cloudflaredStatus.running
-                });
-            } catch (error) {
-                console.error('Failed to load status:', error);
-            }
-        };
-        loadStatus();
-    }, []);
+    // No automatic status polling - status comes from server-side render
 
     const handleAuthenticate = async () => {
         setLoading(true);
@@ -60,7 +45,7 @@ export default function Index({
             if (data.auth_url) {
                 window.open(data.auth_url, '_blank');
                 
-                // Poll for token completion
+                // Poll for token completion (less frequent)
                 const pollInterval = setInterval(async () => {
                     const statusResponse = await fetch('/efactura/status');
                     const statusData = await statusResponse.json();
@@ -69,12 +54,13 @@ export default function Index({
                         clearInterval(pollInterval);
                         setLoading(false);
                     }
-                }, 2000);
+                }, 5000); // Reduced from 2s to 5s
                 
+                // Stop polling after 2 minutes instead of 5
                 setTimeout(() => {
                     clearInterval(pollInterval);
                     setLoading(false);
-                }, 300000);
+                }, 120000);
             } else {
                 setLoading(false);
             }
@@ -119,9 +105,7 @@ export default function Index({
                     {/* Minimal status indicators */}
                     <div className="flex items-center gap-3">
                         <div className="flex items-center gap-1">
-                            {status.tunnelRunning === null ? (
-                                <div className="h-2 w-2 bg-gray-400 rounded-full animate-pulse" />
-                            ) : status.tunnelRunning ? (
+                            {status.tunnelRunning ? (
                                 <Wifi className="h-4 w-4 text-green-600" />
                             ) : (
                                 <WifiOff className="h-4 w-4 text-red-600" />
