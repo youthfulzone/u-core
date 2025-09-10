@@ -1,8 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(C:/Users/TheOldBuffet/.config/herd/bin/php83.bat artisan efactura:import-credentials --environment=production --force)",
-      "Bash(C:/Users/TheOldBuffet/.config/herd/bin/php83.bat artisan tinker --execute=\"\nuse App\\Models\\AnafCredential;\n$cred = AnafCredential::active()->first();\nif ($cred) {\n    $cred->redirect_uri = ''https://efactura.scyte.ro/callback'';\n    $cred->save();\n    echo ''Updated redirect_uri to: '' . $cred->redirect_uri . PHP_EOL;\n} else {\n    echo ''No active credentials found'' . PHP_EOL;\n}\n\")"
+      "Bash(C:/Users/TheOldBuffet/.config/herd/bin/php83.bat artisan cloudflared:tunnel start)"
     ],
     "deny": [],
     "ask": [],

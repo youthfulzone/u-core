@@ -1,77 +1,50 @@
 import AppLayout from '@/layouts/app-layout';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Head, router } from '@inertiajs/react';
+import { Head } from '@inertiajs/react';
 import { useState, useEffect } from 'react';
-import { 
-    CheckCircle, 
-    XCircle, 
-    AlertCircle, 
-    RefreshCw, 
-    ExternalLink,
-    Play,
-    Terminal,
-    Wifi,
-    WifiOff
-} from 'lucide-react';
-
-interface CloudflaredStatus {
-    running: boolean;
-    tunnel_url?: string;
-    callback_url?: string;
-    message: string;
-    required: boolean;
-    setup_command?: string;
-}
-
-interface EfacturaStatus {
-    hasCredentials: boolean;
-    hasValidToken: boolean;
-    tokenExpiresAt?: string;
-    cloudflaredStatus: CloudflaredStatus;
-}
+import { CheckCircle, XCircle, Play, Wifi, WifiOff } from 'lucide-react';
 
 interface EfacturaIndexProps {
     hasCredentials: boolean;
     hasValidToken: boolean;
     tokenExpiresAt?: string;
-    cloudflaredStatus: CloudflaredStatus;
 }
 
 export default function Index({ 
     hasCredentials, 
     hasValidToken, 
-    tokenExpiresAt,
-    cloudflaredStatus: initialCloudflaredStatus 
+    tokenExpiresAt
 }: EfacturaIndexProps) {
-    const [status, setStatus] = useState<EfacturaStatus>({
+    const [status, setStatus] = useState({
         hasCredentials,
         hasValidToken,
         tokenExpiresAt,
-        cloudflaredStatus: initialCloudflaredStatus
+        tunnelRunning: null as boolean | null
     });
     const [loading, setLoading] = useState(false);
 
-    // Auto-refresh status on page load
     useEffect(() => {
-        refreshStatus();
+        // Load real status after page renders
+        const loadStatus = async () => {
+            try {
+                const response = await fetch('/efactura/status');
+                const data = await response.json();
+                setStatus({
+                    hasCredentials: data.hasCredentials,
+                    hasValidToken: data.hasValidToken,
+                    tokenExpiresAt: data.tokenExpiresAt,
+                    tunnelRunning: data.cloudflaredStatus.running
+                });
+            } catch (error) {
+                console.error('Failed to load status:', error);
+            }
+        };
+        loadStatus();
     }, []);
-
-    const refreshStatus = async () => {
-        try {
-            const response = await fetch('/efactura/status');
-            const data = await response.json();
-            setStatus(data);
-        } catch (error) {
-            console.error('Failed to refresh status:', error);
-        }
-    };
 
     const handleAuthenticate = async () => {
         setLoading(true);
-        
         try {
             const response = await fetch('/efactura/authenticate', {
                 method: 'POST',
@@ -84,20 +57,20 @@ export default function Index({
             });
             
             const data = await response.json();
-            
             if (data.auth_url) {
                 window.open(data.auth_url, '_blank');
                 
-                // Start polling for status updates
+                // Poll for token completion
                 const pollInterval = setInterval(async () => {
-                    await refreshStatus();
-                    if (status.hasValidToken) {
+                    const statusResponse = await fetch('/efactura/status');
+                    const statusData = await statusResponse.json();
+                    if (statusData.hasValidToken) {
+                        setStatus(prev => ({ ...prev, hasValidToken: true, tokenExpiresAt: statusData.tokenExpiresAt }));
                         clearInterval(pollInterval);
                         setLoading(false);
                     }
                 }, 2000);
                 
-                // Stop polling after 5 minutes
                 setTimeout(() => {
                     clearInterval(pollInterval);
                     setLoading(false);
@@ -112,7 +85,7 @@ export default function Index({
     };
 
     const handleRevoke = async () => {
-        if (!confirm('Are you sure you want to revoke the access token?')) return;
+        if (!confirm('Revoke access token?')) return;
         
         setLoading(true);
         try {
@@ -125,187 +98,96 @@ export default function Index({
                     'X-CSRF-TOKEN': (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement)?.content || ''
                 }
             });
-            await refreshStatus();
+            setStatus(prev => ({ ...prev, hasValidToken: false, tokenExpiresAt: undefined }));
         } catch (error) {
             console.error('Failed to revoke token:', error);
         }
         setLoading(false);
     };
 
-    const getTokenStatus = () => {
-        if (!status.hasCredentials) {
-            return { color: 'destructive' as const, text: 'No Credentials', icon: XCircle };
-        }
-        if (!status.hasValidToken) {
-            return { color: 'destructive' as const, text: 'Not Authenticated', icon: XCircle };
-        }
-        return { color: 'default' as const, text: 'Authenticated', icon: CheckCircle };
-    };
-
-    const getCloudflaredStatus = () => {
-        if (status.cloudflaredStatus.running) {
-            return { color: 'default' as const, text: 'Active', icon: Wifi };
-        }
-        return { color: 'destructive' as const, text: 'Inactive', icon: WifiOff };
-    };
-
-    const tokenStatusInfo = getTokenStatus();
-    const cloudflaredStatusInfo = getCloudflaredStatus();
-
     return (
         <AppLayout>
             <Head title="e-Facturi" />
             
-            <div className="space-y-6">
+            <div className="flex h-full flex-1 flex-col gap-4 rounded-xl p-4">
                 <div className="flex items-center justify-between">
                     <div>
-                        <h1 className="text-3xl font-bold tracking-tight">e-Facturi</h1>
-                        <p className="text-muted-foreground">
-                            Manage electronic invoices through ANAF integration
-                        </p>
+                        <h1 className="text-2xl font-bold">e-Facturi</h1>
+                        <p className="text-sm text-muted-foreground">ANAF electronic invoices</p>
                     </div>
-                    <Button 
-                        onClick={refreshStatus} 
-                        variant="outline" 
-                        size="sm"
-                        className="gap-2"
-                    >
-                        <RefreshCw className="h-4 w-4" />
-                        Refresh Status
-                    </Button>
+                    
+                    {/* Minimal status indicators */}
+                    <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-1">
+                            {status.tunnelRunning === null ? (
+                                <div className="h-2 w-2 bg-gray-400 rounded-full animate-pulse" />
+                            ) : status.tunnelRunning ? (
+                                <Wifi className="h-4 w-4 text-green-600" />
+                            ) : (
+                                <WifiOff className="h-4 w-4 text-red-600" />
+                            )}
+                            <span className="text-xs text-muted-foreground">Tunnel</span>
+                        </div>
+                        
+                        <div className="flex items-center gap-1">
+                            {status.hasValidToken ? (
+                                <CheckCircle className="h-4 w-4 text-green-600" />
+                            ) : (
+                                <XCircle className="h-4 w-4 text-red-600" />
+                            )}
+                            <span className="text-xs text-muted-foreground">Auth</span>
+                        </div>
+                    </div>
                 </div>
 
-                {/* Show tunnel status for informational purposes only */}
-                {!status.cloudflaredStatus.running && (
-                    <Alert>
-                        <AlertCircle className="h-4 w-4" />
-                        <AlertDescription>
-                            <strong>Laravel is starting the tunnel automatically.</strong> OAuth callbacks will be available momentarily.
-                        </AlertDescription>
-                    </Alert>
-                )}
-
-                <div className="grid gap-6 md:grid-cols-2">
-                    {/* Authentication Status */}
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                                <tokenStatusInfo.icon className="h-5 w-5" />
-                                Authentication Status
-                            </CardTitle>
-                            <CardDescription>
-                                ANAF OAuth token status and management
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="flex items-center justify-between">
-                                <span>Status:</span>
-                                <Badge variant={tokenStatusInfo.color}>
-                                    {tokenStatusInfo.text}
-                                </Badge>
+                {/* Main action */}
+                <div className="flex-1 flex items-center justify-center">
+                    <div className="text-center space-y-4 max-w-sm">
+                        {!status.hasCredentials ? (
+                            <div>
+                                <Badge variant="destructive" className="mb-3">No Credentials</Badge>
+                                <p className="text-sm text-muted-foreground">ANAF credentials not configured</p>
                             </div>
-                            
-                            {status.hasCredentials && (
-                                <div className="flex items-center justify-between">
-                                    <span>Credentials:</span>
-                                    <Badge variant="default">
-                                        <CheckCircle className="h-3 w-3 mr-1" />
-                                        Configured
-                                    </Badge>
-                                </div>
-                            )}
-                            
-                            {status.tokenExpiresAt && (
-                                <div className="flex items-center justify-between">
-                                    <span>Token expires:</span>
-                                    <span className="text-sm text-muted-foreground">
-                                        {new Date(status.tokenExpiresAt).toLocaleDateString()}
-                                    </span>
-                                </div>
-                            )}
-                            
-                            <div className="pt-4 space-y-2">
-                                {!status.hasValidToken ? (
-                                    <Button 
-                                        onClick={handleAuthenticate}
-                                        disabled={loading}
-                                        className="w-full gap-2"
-                                    >
-                                        <Play className="h-4 w-4" />
-                                        {loading ? 'Authenticating...' : 'Authenticate with ANAF'}
-                                    </Button>
-                                ) : (
+                        ) : !status.hasValidToken ? (
+                            <div className="space-y-4">
+                                <Badge variant="secondary">Ready to authenticate</Badge>
+                                <Button 
+                                    onClick={handleAuthenticate}
+                                    disabled={loading}
+                                    size="lg"
+                                    className="w-full gap-2"
+                                >
+                                    <Play className="h-4 w-4" />
+                                    {loading ? 'Authenticating...' : 'Authenticate with ANAF'}
+                                </Button>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                <Badge variant="default">Authenticated</Badge>
+                                {status.tokenExpiresAt && (
+                                    <p className="text-xs text-muted-foreground">
+                                        Expires: {new Date(status.tokenExpiresAt).toLocaleDateString()}
+                                    </p>
+                                )}
+                                <div className="space-y-2">
                                     <Button 
                                         onClick={handleRevoke}
                                         disabled={loading}
-                                        variant="destructive"
-                                        className="w-full gap-2"
+                                        variant="outline"
+                                        size="sm"
                                     >
-                                        <XCircle className="h-4 w-4" />
-                                        Revoke Access Token
+                                        Revoke Token
                                     </Button>
-                                )}
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* System Status */}
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                                <cloudflaredStatusInfo.icon className="h-5 w-5" />
-                                System Status
-                            </CardTitle>
-                            <CardDescription>
-                                Laravel automatically manages OAuth infrastructure
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="flex items-center justify-between">
-                                <span>Tunnel:</span>
-                                <Badge variant={cloudflaredStatusInfo.color}>
-                                    {status.cloudflaredStatus.running ? 'Active' : 'Starting...'}
-                                </Badge>
-                            </div>
-                            
-                            {status.cloudflaredStatus.tunnel_url && (
-                                <div className="flex items-center justify-between">
-                                    <span>Public URL:</span>
-                                    <a 
-                                        href={status.cloudflaredStatus.tunnel_url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-sm text-blue-600 hover:underline flex items-center gap-1"
-                                    >
-                                        efactura.scyte.ro
-                                        <ExternalLink className="h-3 w-3" />
-                                    </a>
+                                    <div className="text-center p-6 border rounded-lg bg-muted/50">
+                                        <p className="text-sm text-muted-foreground">
+                                            Invoice management features coming soon
+                                        </p>
+                                    </div>
                                 </div>
-                            )}
-                            
-                            <div className="text-xs text-muted-foreground">
-                                OAuth callbacks are automatically configured and managed by Laravel.
                             </div>
-                        </CardContent>
-                    </Card>
+                        )}
+                    </div>
                 </div>
-
-                {/* Placeholder for future invoice management */}
-                {status.hasValidToken && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Invoice Management</CardTitle>
-                            <CardDescription>
-                                Upload and manage electronic invoices (Coming soon)
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-center py-8 text-muted-foreground">
-                                Invoice upload and management features will be available here
-                            </div>
-                        </CardContent>
-                    </Card>
-                )}
             </div>
         </AppLayout>
     );

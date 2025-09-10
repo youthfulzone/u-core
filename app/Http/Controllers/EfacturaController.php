@@ -27,14 +27,7 @@ class EfacturaController extends Controller
         return Inertia::render('Efactura/Index', [
             'hasCredentials' => (bool) $credential,
             'hasValidToken' => $token && $token->isValid(),
-            'tokenExpiresAt' => $token?->expires_at?->toISOString(),
-            'cloudflaredStatus' => [
-                'running' => null, // Will be loaded via AJAX
-                'tunnel_url' => 'https://efactura.scyte.ro',
-                'callback_url' => 'https://efactura.scyte.ro/callback',
-                'message' => 'Loading...',
-                'required' => false
-            ]
+            'tokenExpiresAt' => $token?->expires_at?->toISOString()
         ]);
     }
 
