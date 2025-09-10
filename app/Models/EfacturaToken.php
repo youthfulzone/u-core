@@ -11,10 +11,7 @@ class EfacturaToken extends Model
     protected $collection = 'efactura_tokens';
 
     protected $fillable = [
-        'company_id',
-        'cui',
         'client_id',
-        'client_secret',
         'access_token',
         'refresh_token',
         'token_type',
@@ -36,9 +33,9 @@ class EfacturaToken extends Model
         ];
     }
 
-    public function company()
+    public function credential()
     {
-        return $this->belongsTo(Company::class);
+        return $this->belongsTo(AnafCredential::class, 'client_id', 'client_id');
     }
 
     public function isExpired(): bool
@@ -56,8 +53,8 @@ class EfacturaToken extends Model
         return $query->where('status', 'active');
     }
 
-    public function scopeForCui($query, string $cui)
+    public function scopeForClientId($query, string $clientId)
     {
-        return $query->where('cui', $cui);
+        return $query->where('client_id', $clientId);
     }
 }

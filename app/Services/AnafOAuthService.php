@@ -11,43 +11,36 @@ use Carbon\Carbon;
 
 class AnafOAuthService
 {
-    private const ANAF_OAUTH_BASE_URL = 'https://logincert.anaf.ro/anaf-oauth2';
-    private const ANAF_TEST_BASE_URL = 'https://logincert-test.anaf.ro/anaf-oauth2';
+    private const ANAF_AUTH_URL = 'https://logincert.anaf.ro/anaf-oauth2/v1/authorize';
+    private const ANAF_TOKEN_URL = 'https://logincert.anaf.ro/anaf-oauth2/v1/token';
 
     public function __construct(
         private string $environment = 'sandbox'
     ) {}
 
-    public function getAuthorizationUrl(string $clientId, string $redirectUri, string $state = null): string
+    public function getAuthorizationUrl(string $clientId, string $redirectUri): string
     {
-        $baseUrl = $this->environment === 'production' 
-            ? self::ANAF_OAUTH_BASE_URL 
-            : self::ANAF_TEST_BASE_URL;
-
         $params = http_build_query([
+            'response_type' => 'code',
             'client_id' => $clientId,
             'redirect_uri' => $redirectUri,
-            'response_type' => 'code',
-            'scope' => 'efactura',
-            'state' => $state ?? bin2hex(random_bytes(16))
+            'token_content_type' => 'jwt'
+            // No scope, no state - as per ANAF docs
         ]);
 
-        return "{$baseUrl}/authorize?{$params}";
+        return self::ANAF_AUTH_URL . "?{$params}";
     }
 
     public function exchangeCodeForToken(string $code, string $clientId, string $clientSecret, string $redirectUri): array
     {
-        $baseUrl = $this->environment === 'production' 
-            ? self::ANAF_OAUTH_BASE_URL 
-            : self::ANAF_TEST_BASE_URL;
-
-        $response = Http::asForm()->post("{$baseUrl}/token", [
-            'grant_type' => 'authorization_code',
-            'client_id' => $clientId,
-            'client_secret' => $clientSecret,
-            'code' => $code,
-            'redirect_uri' => $redirectUri
-        ]);
+        $response = Http::withBasicAuth($clientId, $clientSecret)
+            ->asForm()
+            ->post(self::ANAF_TOKEN_URL, [
+                'grant_type' => 'authorization_code',
+                'code' => $code,
+                'redirect_uri' => $redirectUri,
+                'token_content_type' => 'jwt'
+            ]);
 
         if (!$response->successful()) {
             Log::error('ANAF OAuth token exchange failed', [
@@ -62,16 +55,13 @@ class AnafOAuthService
 
     public function refreshToken(string $refreshToken, string $clientId, string $clientSecret): array
     {
-        $baseUrl = $this->environment === 'production' 
-            ? self::ANAF_OAUTH_BASE_URL 
-            : self::ANAF_TEST_BASE_URL;
-
-        $response = Http::asForm()->post("{$baseUrl}/token", [
-            'grant_type' => 'refresh_token',
-            'refresh_token' => $refreshToken,
-            'client_id' => $clientId,
-            'client_secret' => $clientSecret
-        ]);
+        $response = Http::withBasicAuth($clientId, $clientSecret)
+            ->asForm()
+            ->post(self::ANAF_TOKEN_URL, [
+                'grant_type' => 'refresh_token',
+                'refresh_token' => $refreshToken,
+                'token_content_type' => 'jwt'
+            ]);
 
         if (!$response->successful()) {
             Log::error('ANAF OAuth token refresh failed', [
@@ -84,32 +74,38 @@ class AnafOAuthService
         return $response->json();
     }
 
-    public function storeToken(string $cui, array $tokenData, string $clientId, string $clientSecret): EfacturaToken
+    public function storeToken(array $tokenData, string $clientId): EfacturaToken
     {
-        $company = Company::where('cui', $cui)->first();
+        // Deactivate any existing tokens for this client_id to ensure only one active token
+        EfacturaToken::where('client_id', $clientId)
+            ->where('status', 'active')
+            ->update(['status' => 'replaced']);
 
-        return EfacturaToken::updateOrCreate(
-            ['cui' => $cui, 'client_id' => $clientId],
-            [
-                'company_id' => $company?->_id,
-                'client_secret' => $clientSecret,
-                'access_token' => $tokenData['access_token'],
-                'refresh_token' => $tokenData['refresh_token'] ?? null,
-                'token_type' => $tokenData['token_type'] ?? 'Bearer',
-                'expires_at' => isset($tokenData['expires_in']) 
-                    ? Carbon::now()->addSeconds($tokenData['expires_in'])
-                    : null,
-                'scope' => $tokenData['scope'] ?? 'efactura',
-                'status' => 'active',
-                'created_via' => 'oauth_flow',
-                'last_used_at' => Carbon::now()
-            ]
-        );
+        return EfacturaToken::create([
+            'client_id' => $clientId,
+            'access_token' => $tokenData['access_token'],
+            'refresh_token' => $tokenData['refresh_token'] ?? null,
+            'token_type' => $tokenData['token_type'] ?? 'Bearer',
+            'expires_at' => isset($tokenData['expires_in']) 
+                ? Carbon::now()->addSeconds($tokenData['expires_in'])
+                : null,
+            'scope' => $tokenData['scope'] ?? '',
+            'status' => 'active',
+            'created_via' => 'oauth_flow',
+            'last_used_at' => Carbon::now()
+        ]);
     }
 
-    public function getValidToken(string $cui): ?EfacturaToken
+    public function getValidToken(): ?EfacturaToken
     {
-        $token = EfacturaToken::forCui($cui)->active()->first();
+        // Get the active credential and its token
+        $credential = AnafCredential::active()->first();
+        
+        if (!$credential) {
+            return null;
+        }
+
+        $token = EfacturaToken::forClientId($credential->client_id)->active()->first();
 
         if (!$token) {
             return null;
@@ -120,7 +116,7 @@ class AnafOAuthService
                 $newTokenData = $this->refreshToken(
                     $token->refresh_token,
                     $token->client_id,
-                    $token->client_secret
+                    $credential->client_secret
                 );
 
                 $token->update([
@@ -134,7 +130,8 @@ class AnafOAuthService
 
                 return $token->fresh();
             } catch (\Exception $e) {
-                Log::error('Failed to refresh token for CUI: ' . $cui, [
+                Log::error('Failed to refresh token', [
+                    'client_id' => $token->client_id,
                     'error' => $e->getMessage()
                 ]);
 
@@ -155,25 +152,22 @@ class AnafOAuthService
         return null;
     }
 
-    public function revokeToken(string $cui): bool
+    public function revokeToken(): bool
     {
-        $token = EfacturaToken::forCui($cui)->active()->first();
+        $credential = AnafCredential::active()->first();
+        
+        if (!$credential) {
+            return true;
+        }
+
+        $token = EfacturaToken::forClientId($credential->client_id)->active()->first();
 
         if (!$token) {
             return true; // Already revoked/doesn't exist
         }
 
-        $baseUrl = $this->environment === 'production' 
-            ? self::ANAF_OAUTH_BASE_URL 
-            : self::ANAF_TEST_BASE_URL;
-
         try {
-            Http::asForm()->post("{$baseUrl}/revoke", [
-                'token' => $token->access_token,
-                'client_id' => $token->client_id,
-                'client_secret' => $token->client_secret
-            ]);
-
+            // Note: ANAF may not have a revoke endpoint, but we'll mark as revoked locally
             $token->update([
                 'status' => 'revoked',
                 'error_message' => null
@@ -181,7 +175,8 @@ class AnafOAuthService
 
             return true;
         } catch (\Exception $e) {
-            Log::error('Failed to revoke token for CUI: ' . $cui, [
+            Log::error('Failed to revoke token', [
+                'client_id' => $credential->client_id,
                 'error' => $e->getMessage()
             ]);
 
