@@ -31,7 +31,7 @@ class EfacturaController extends Controller
             'cloudflaredStatus' => [
                 'running' => null, // Will be loaded via AJAX
                 'tunnel_url' => 'https://efactura.scyte.ro',
-                'callback_url' => 'https://efactura.scyte.ro/efactura/oauth/callback',
+                'callback_url' => 'https://efactura.scyte.ro/callback',
                 'message' => 'Loading...',
                 'required' => false
             ]

@@ -55,7 +55,7 @@ class EfacturaImportCredentials extends Command
             [
                 'environment' => $environment,
                 'client_secret' => $clientSecret,
-                'redirect_uri' => 'https://efactura.scyte.ro/efactura/oauth/callback',
+                'redirect_uri' => 'https://efactura.scyte.ro/callback',
                 'scope' => '',
                 'is_active' => true,
                 'description' => "Imported from cloudflared/.env ({$environment})",

@@ -114,8 +114,13 @@ Route::post('/api/anaf/extension-cookies', [AnafBrowserSessionController::class,
     ->name('anaf.extension.cookies');
 
 // E-factura OAuth callback - MUST be accessible via cloudflared tunnel
-Route::get('/efactura/oauth/callback', [\App\Http\Controllers\EfacturaController::class, 'callback'])
+// Primary callback route matching Python script configuration
+Route::get('/callback', [\App\Http\Controllers\EfacturaController::class, 'callback'])
     ->name('efactura.oauth.callback');
+
+// Legacy callback route for compatibility
+Route::get('/efactura/oauth/callback', [\App\Http\Controllers\EfacturaController::class, 'callback'])
+    ->name('efactura.oauth.callback.legacy');
 
 // Test VIES API (temporary route for testing)
 Route::get('/test-vies/{cui?}', function ($cui = '23681054') {
