@@ -1,10 +1,10 @@
 import AppLayout from '@/layouts/app-layout';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Head } from '@inertiajs/react';
 import { useState, useEffect } from 'react';
-import { CheckCircle, XCircle, Play, Wifi, WifiOff } from 'lucide-react';
+import { CheckCircle, XCircle, Play } from 'lucide-react';
+import { type BreadcrumbItem } from '@/types';
 
 interface EfacturaIndexProps {
     hasCredentials: boolean;
@@ -28,6 +28,11 @@ export default function Index({
     const [loading, setLoading] = useState(false);
 
     // No automatic status polling - status comes from server-side render
+    
+    const breadcrumbs: BreadcrumbItem[] = [
+        { href: '/dashboard', title: 'Dashboard' },
+        { href: '/efactura', title: 'e-Facturi', active: true }
+    ];
 
     const handleAuthenticate = async () => {
         setLoading(true);
@@ -93,38 +98,10 @@ export default function Index({
     };
 
     return (
-        <AppLayout>
+        <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="e-Facturi" />
             
             <div className="flex h-full flex-1 flex-col gap-4 rounded-xl p-4">
-                <div className="flex items-center justify-between">
-                    <div>
-                        <h1 className="text-2xl font-bold">e-Facturi</h1>
-                        <p className="text-sm text-muted-foreground">ANAF electronic invoices</p>
-                    </div>
-                </div>
-
-                {/* Stats Cards - matching firme page style */}
-                <div className="grid gap-4 md:grid-cols-4">
-                    <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Tunnel Status</CardTitle>
-                            {status.tunnelRunning ? (
-                                <Wifi className="h-4 w-4 text-muted-foreground" />
-                            ) : (
-                                <WifiOff className="h-4 w-4 text-muted-foreground" />
-                            )}
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold">
-                                {status.tunnelRunning ? 'Active' : 'Inactive'}
-                            </div>
-                            <p className="text-xs text-muted-foreground">
-                                {status.tunnelRunning ? 'OAuth ready' : 'Starting...'}
-                            </p>
-                        </CardContent>
-                    </Card>
-                </div>
 
                 {/* Main action */}
                 <div className="flex-1 flex items-center justify-center">

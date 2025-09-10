@@ -26,6 +26,9 @@ class CloudflaredService
             return self::$statusCache;
         }
         
+        // Clear cache for fresh check
+        self::$statusCache = null;
+        
         // Multiple check approaches for better reliability
         
         // 1. Check if process is running
@@ -46,23 +49,40 @@ class CloudflaredService
     
     private function checkProcess(): bool
     {
+        try {
+            $pythonScript = base_path('cloudflared/tunnel.py');
+            if (file_exists($pythonScript)) {
+                $output = shell_exec("cd /d \"" . base_path('cloudflared') . "\" && python tunnel.py status 2>NUL");
+                return trim($output) === 'running';
+            }
+        } catch (\Exception $e) {
+            // Fallback to process check
+        }
+        
         $output = shell_exec('tasklist /FI "IMAGENAME eq cloudflared.exe" /FO CSV 2>NUL');
         return $output && strpos($output, 'cloudflared.exe') !== false;
     }
     
     private function verifyTunnelAccess(): bool
     {
-        // Quick check if tunnel URL is accessible
+        // Quick check if tunnel URL is accessible (301, 404 are acceptable - means tunnel is working)
         $context = stream_context_create([
             'http' => [
-                'timeout' => 2,
-                'method' => 'HEAD'
+                'timeout' => 5,
+                'method' => 'HEAD',
+                'follow_location' => false  // Don't follow redirects, just check if tunnel responds
             ]
         ]);
         
         try {
             $headers = @get_headers('https://efactura.scyte.ro', false, $context);
-            return $headers && strpos($headers[0], '200') !== false;
+            if ($headers) {
+                // 200, 301, 404, or any HTTP response means tunnel is working
+                // 502/503 means tunnel is not working properly
+                $statusCode = (int) substr($headers[0], 9, 3);
+                return $statusCode < 500;
+            }
+            return false;
         } catch (\Exception $e) {
             return false;
         }
@@ -74,28 +94,28 @@ class CloudflaredService
             return true;
         }
 
-        if (!file_exists($this->executablePath)) {
-            Log::error('Cloudflared executable not found', ['path' => $this->executablePath]);
-            return false;
-        }
-
         try {
-            // Start cloudflared tunnel in background using Python script
-            $pythonScript = base_path('cloudflared/e.py');
+            // Use dedicated tunnel.py script
+            $pythonScript = base_path('cloudflared/tunnel.py');
             if (file_exists($pythonScript)) {
-                $command = "cd /d \"{$this->workingDirectory}\" && start /B python e.py";
+                $command = "cd /d \"{$this->workingDirectory}\" && start /B python tunnel.py start";
                 shell_exec($command);
                 
                 // Wait a moment and check if it started
-                sleep(2);
+                sleep(3);
                 return $this->isRunning();
             }
 
-            // Fallback to direct cloudflared execution
+            // Fallback to direct cloudflared execution if tunnel.py doesn't exist
+            if (!file_exists($this->executablePath)) {
+                Log::error('Cloudflared executable not found', ['path' => $this->executablePath]);
+                return false;
+            }
+
             $command = "cd /d \"{$this->workingDirectory}\" && start /B cloudflared.exe tunnel run --url http://u-core.test efactura";
             shell_exec($command);
             
-            sleep(2);
+            sleep(3);
             return $this->isRunning();
 
         } catch (\Exception $e) {
@@ -107,7 +127,19 @@ class CloudflaredService
     public function stop(): bool
     {
         try {
-            shell_exec('taskkill /IM "cloudflared.exe" /F 2>NUL');
+            // Use dedicated tunnel.py script for stopping
+            $pythonScript = base_path('cloudflared/tunnel.py');
+            if (file_exists($pythonScript)) {
+                shell_exec("cd /d \"" . base_path('cloudflared') . "\" && python tunnel.py stop 2>NUL");
+            } else {
+                // Fallback to direct process kill
+                shell_exec('taskkill /IM "cloudflared.exe" /F 2>NUL');
+            }
+            
+            // Clear cache
+            self::$statusCache = null;
+            self::$cacheTime = 0;
+            
             return true;
         } catch (\Exception $e) {
             Log::error('Failed to stop cloudflared tunnel', ['error' => $e->getMessage()]);
@@ -144,5 +176,11 @@ class CloudflaredService
         }
         
         return true;
+    }
+
+    public function clearStatusCache(): void
+    {
+        self::$statusCache = null;
+        self::$cacheTime = 0;
     }
 }

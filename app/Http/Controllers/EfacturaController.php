@@ -29,6 +29,8 @@ class EfacturaController extends Controller
             'hasValidToken' => $token && $token->isValid(),
             'tokenExpiresAt' => $token?->expires_at?->toISOString(),
             'tunnelRunning' => $this->cloudflaredService->isRunning()
+        ])->with([
+            'tunnelStatus' => $this->cloudflaredService->isRunning()
         ]);
     }
 
@@ -43,7 +45,10 @@ class EfacturaController extends Controller
             return response()->json(['error' => 'No active ANAF credentials found'], 400);
         }
 
-        $authUrl = $this->oauthService->getAuthorizationUrl(
+        // Create OAuth service with correct environment
+        $oauthService = new \App\Services\AnafOAuthService($credential->environment);
+        
+        $authUrl = $oauthService->getAuthorizationUrl(
             $credential->client_id,
             $credential->redirect_uri
         );
@@ -55,10 +60,33 @@ class EfacturaController extends Controller
     {
         $code = $request->get('code');
         $error = $request->get('error');
+        $errorDescription = $request->get('error_description');
+        $state = $request->get('state');
+
+        // Log all callback parameters for debugging
+        Log::info('OAuth callback received', [
+            'code' => $code ? 'present' : 'missing',
+            'error' => $error,
+            'error_description' => $errorDescription,
+            'state' => $state,
+            'all_params' => $request->all()
+        ]);
+
+        // Verify state parameter for CSRF protection
+        if ($state !== session('oauth_state')) {
+            Log::error('OAuth state parameter mismatch', [
+                'received_state' => $state,
+                'session_state' => session('oauth_state')
+            ]);
+            return redirect()->route('efactura.index')->with('error', 'Invalid state parameter - possible CSRF attack');
+        }
 
         if ($error) {
-            Log::error('OAuth callback error', ['error' => $error]);
-            return redirect()->route('efactura.index')->with('error', 'Authentication failed: ' . $error);
+            Log::error('OAuth callback error', [
+                'error' => $error,
+                'error_description' => $errorDescription
+            ]);
+            return redirect()->route('efactura.index')->with('error', 'Authentication failed: ' . $error . ($errorDescription ? ' - ' . $errorDescription : ''));
         }
 
         if (!$code) {
@@ -72,8 +100,11 @@ class EfacturaController extends Controller
                 return redirect()->route('efactura.index')->with('error', 'No active credentials found');
             }
 
+            // Create OAuth service with correct environment
+            $oauthService = new \App\Services\AnafOAuthService($credential->environment);
+
             // Exchange code for tokens
-            $tokenData = $this->oauthService->exchangeCodeForToken(
+            $tokenData = $oauthService->exchangeCodeForToken(
                 $code,
                 $credential->client_id,
                 $credential->client_secret,
@@ -81,7 +112,7 @@ class EfacturaController extends Controller
             );
 
             // Store the tokens (this will replace any existing active token)
-            $this->oauthService->storeToken($tokenData, $credential->client_id);
+            $oauthService->storeToken($tokenData, $credential->client_id);
 
             return redirect()->route('efactura.index')->with('success', 'Successfully authenticated with ANAF');
 

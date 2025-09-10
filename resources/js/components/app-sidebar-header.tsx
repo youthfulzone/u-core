@@ -19,6 +19,7 @@ export function AppSidebarHeader({ breadcrumbs = [] }: { breadcrumbs?: Breadcrum
     const sessionActive = props.sessionActive as boolean;
     const authenticationStatusText = props.authenticationStatusText as string;
     const apiCallStatus = props.apiCallStatus as ApiCallStatus | undefined;
+    const tunnelStatus = props.tunnelStatus as boolean;
     
     const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'checking'>(
         sessionActive ? 'connected' : 'disconnected'
@@ -73,10 +74,23 @@ export function AppSidebarHeader({ breadcrumbs = [] }: { breadcrumbs?: Breadcrum
                 <Breadcrumbs breadcrumbs={breadcrumbs} />
             </div>
             
-            {/* ANAF Status, API Counter, and Auth Button */}
+            {/* Tunnel Status, ANAF Status, API Counter, and Auth Button */}
             <div className="ml-auto flex items-center gap-3">
+                {/* Tunnel Status */}
+                {tunnelStatus !== undefined && (
+                    <div className="flex items-center gap-1">
+                        <Icon 
+                            iconNode={tunnelStatus ? Wifi : WifiOff} 
+                            className={`h-4 w-4 ${tunnelStatus ? 'text-green-500' : 'text-red-500'}`} 
+                        />
+                        <div className="text-xs text-muted-foreground">
+                            <span className="font-medium text-foreground">Tunnel</span>
+                        </div>
+                    </div>
+                )}
+                
                 {/* WiFi Status (without dot) */}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
                     <Icon 
                         iconNode={sessionActive ? Wifi : WifiOff} 
                         className={`h-4 w-4 ${sessionActive ? 'text-green-500' : 'text-orange-500'}`} 

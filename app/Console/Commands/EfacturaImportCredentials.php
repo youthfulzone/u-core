@@ -69,7 +69,7 @@ class EfacturaImportCredentials extends Command
             [
                 ['Environment', $environment],
                 ['Client ID', $clientId],
-                ['Redirect URI', 'https://efactura.scyte.ro/efactura/oauth/callback'],
+                ['Redirect URI', $credential->redirect_uri],
                 ['Status', 'Active'],
                 ['ID', $credential->_id]
             ]

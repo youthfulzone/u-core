@@ -13,6 +13,10 @@ class AnafOAuthService
 {
     private const ANAF_AUTH_URL = 'https://logincert.anaf.ro/anaf-oauth2/v1/authorize';
     private const ANAF_TOKEN_URL = 'https://logincert.anaf.ro/anaf-oauth2/v1/token';
+    
+    // Sandbox URLs (if needed)
+    private const ANAF_SANDBOX_AUTH_URL = 'https://oauth-test.anaf.ro/anaf-oauth2/v1/authorize';
+    private const ANAF_SANDBOX_TOKEN_URL = 'https://oauth-test.anaf.ro/anaf-oauth2/v1/token';
 
     public function __construct(
         private string $environment = 'sandbox'
@@ -20,22 +24,34 @@ class AnafOAuthService
 
     public function getAuthorizationUrl(string $clientId, string $redirectUri): string
     {
+        // Generate CSRF protection state
+        $state = bin2hex(random_bytes(16));
+        
         $params = http_build_query([
             'response_type' => 'code',
             'client_id' => $clientId,
             'redirect_uri' => $redirectUri,
-            'token_content_type' => 'jwt'
-            // No scope, no state - as per ANAF docs
+            'scope' => 'EFACTURA',  // Required scope for e-Factura access
+            'state' => $state,  // CSRF protection
+            'token_content_type' => 'jwt'  // ANAF requires this parameter
         ]);
 
-        return self::ANAF_AUTH_URL . "?{$params}";
+        $authUrl = $this->environment === 'sandbox' ? self::ANAF_SANDBOX_AUTH_URL : self::ANAF_AUTH_URL;
+        
+        // Store state in session for verification
+        session(['oauth_state' => $state]);
+        
+        return $authUrl . "?{$params}";
     }
 
     public function exchangeCodeForToken(string $code, string $clientId, string $clientSecret, string $redirectUri): array
     {
+        $tokenUrl = $this->environment === 'sandbox' ? self::ANAF_SANDBOX_TOKEN_URL : self::ANAF_TOKEN_URL;
+        
+        // Use Basic Auth header as per official ANAF documentation
         $response = Http::withBasicAuth($clientId, $clientSecret)
             ->asForm()
-            ->post(self::ANAF_TOKEN_URL, [
+            ->post($tokenUrl, [
                 'grant_type' => 'authorization_code',
                 'code' => $code,
                 'redirect_uri' => $redirectUri,

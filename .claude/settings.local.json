@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(C:/Users/TheOldBuffet/.config/herd/bin/php83.bat artisan cloudflared:tunnel start)"
+      "Bash(C:/Users/TheOldBuffet/.config/herd/bin/php83.bat artisan tinker:*)",
+      "Bash(C:/Users/TheOldBuffet/.config/herd/bin/php83.bat:*)"
     ],
     "deny": [],
     "ask": [],
