@@ -54,6 +54,11 @@ export default function Index({
     });
     const [loading, setLoading] = useState(false);
 
+    // Auto-refresh status on page load
+    useEffect(() => {
+        refreshStatus();
+    }, []);
+
     const refreshStatus = async () => {
         try {
             const response = await fetch('/efactura/status');

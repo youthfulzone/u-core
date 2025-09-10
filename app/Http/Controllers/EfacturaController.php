@@ -21,9 +21,6 @@ class EfacturaController extends Controller
 
     public function index()
     {
-        // Ensure cloudflared is running
-        $this->cloudflaredService->ensureRunning();
-        
         $credential = AnafCredential::active()->first();
         $token = $credential ? EfacturaToken::forClientId($credential->client_id)->active()->first() : null;
 
@@ -31,7 +28,13 @@ class EfacturaController extends Controller
             'hasCredentials' => (bool) $credential,
             'hasValidToken' => $token && $token->isValid(),
             'tokenExpiresAt' => $token?->expires_at?->toISOString(),
-            'cloudflaredStatus' => $this->cloudflaredService->getStatus()
+            'cloudflaredStatus' => [
+                'running' => null, // Will be loaded via AJAX
+                'tunnel_url' => 'https://efactura.scyte.ro',
+                'callback_url' => 'https://efactura.scyte.ro/efactura/oauth/callback',
+                'message' => 'Loading...',
+                'required' => false
+            ]
         ]);
     }
 
@@ -96,6 +99,12 @@ class EfacturaController extends Controller
 
     public function status()
     {
+        // Start tunnel check in background if not running (non-blocking)
+        if (!$this->cloudflaredService->isRunning()) {
+            // Start tunnel asynchronously without blocking
+            $this->startTunnelAsync();
+        }
+        
         $credential = AnafCredential::active()->first();
         $token = $credential ? EfacturaToken::forClientId($credential->client_id)->active()->first() : null;
 
@@ -105,6 +114,15 @@ class EfacturaController extends Controller
             'tokenExpiresAt' => $token?->expires_at?->toISOString(),
             'cloudflaredStatus' => $this->cloudflaredService->getStatus()
         ]);
+    }
+
+    private function startTunnelAsync(): void
+    {
+        // Start tunnel in background without blocking the response
+        if (file_exists(base_path('cloudflared/e.py'))) {
+            $command = "cd /d \"" . base_path('cloudflared') . "\" && start /B python e.py";
+            shell_exec($command . ' > NUL 2>&1 &');
+        }
     }
 
     public function revoke()

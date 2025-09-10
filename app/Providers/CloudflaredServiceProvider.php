@@ -17,24 +17,37 @@ class CloudflaredServiceProvider extends ServiceProvider
     {
         // Only auto-start in production or when explicitly configured
         if (config('app.env') === 'production' || config('services.cloudflared.auto_start', false)) {
-            $this->startCloudflaredTunnel();
+            $this->startCloudflaredTunnelAsync();
         }
     }
 
-    private function startCloudflaredTunnel(): void
+    private function startCloudflaredTunnelAsync(): void
     {
-        try {
-            $service = $this->app->make(CloudflaredService::class);
-            
-            if (!$service->isRunning()) {
-                Log::info('Auto-starting cloudflared tunnel for OAuth callbacks');
-                $service->start();
+        // Start tunnel check asynchronously to avoid blocking boot
+        register_shutdown_function(function () {
+            try {
+                $service = $this->app->make(CloudflaredService::class);
+                
+                if (!$service->isRunning()) {
+                    Log::info('Auto-starting cloudflared tunnel for OAuth callbacks');
+                    // Start without the blocking sleep operations
+                    $this->startTunnelNonBlocking();
+                }
+            } catch (\Exception $e) {
+                Log::warning('Failed to auto-start cloudflared tunnel', [
+                    'error' => $e->getMessage(),
+                    'note' => 'OAuth functionality may be limited'
+                ]);
             }
-        } catch (\Exception $e) {
-            Log::warning('Failed to auto-start cloudflared tunnel', [
-                'error' => $e->getMessage(),
-                'note' => 'OAuth functionality may be limited'
-            ]);
+        });
+    }
+
+    private function startTunnelNonBlocking(): void
+    {
+        $pythonScript = base_path('cloudflared/e.py');
+        if (file_exists($pythonScript)) {
+            $command = "cd /d \"" . base_path('cloudflared') . "\" && start /B python e.py";
+            shell_exec($command . ' > NUL 2>&1 &');
         }
     }
 }
