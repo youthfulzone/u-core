@@ -1,4 +1,4 @@
-import AuthenticatedLayout from '@/layouts/authenticated-layout';
+import AppLayout from '@/layouts/app-layout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -134,7 +134,7 @@ export default function Index({
     const cloudflaredStatusInfo = getCloudflaredStatus();
 
     return (
-        <AuthenticatedLayout>
+        <AppLayout>
             <Head title="e-Facturi" />
             
             <div className="space-y-6">
@@ -312,6 +312,6 @@ export default function Index({
                     </Card>
                 )}
             </div>
-        </AuthenticatedLayout>
+        </AppLayout>
     );
 }
