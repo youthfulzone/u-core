@@ -1,6 +1,7 @@
 import AppLayout from '@/layouts/app-layout';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Head } from '@inertiajs/react';
 import { useState, useEffect } from 'react';
 import { CheckCircle, XCircle, Play, Wifi, WifiOff } from 'lucide-react';
@@ -97,32 +98,32 @@ export default function Index({
             
             <div className="flex h-full flex-1 flex-col gap-4 rounded-xl p-4">
                 <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                        <div>
-                            <h1 className="text-2xl font-bold">e-Facturi</h1>
-                            <p className="text-sm text-muted-foreground">ANAF electronic invoices</p>
-                        </div>
-                        
-                        {/* Move tunnel status to left side near title */}
-                        <div className="flex items-center gap-1 ml-6">
+                    <div>
+                        <h1 className="text-2xl font-bold">e-Facturi</h1>
+                        <p className="text-sm text-muted-foreground">ANAF electronic invoices</p>
+                    </div>
+                </div>
+
+                {/* Stats Cards - matching firme page style */}
+                <div className="grid gap-4 md:grid-cols-4">
+                    <Card>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                            <CardTitle className="text-sm font-medium">Tunnel Status</CardTitle>
                             {status.tunnelRunning ? (
-                                <Wifi className="h-4 w-4 text-green-600" />
+                                <Wifi className="h-4 w-4 text-muted-foreground" />
                             ) : (
-                                <WifiOff className="h-4 w-4 text-red-600" />
+                                <WifiOff className="h-4 w-4 text-muted-foreground" />
                             )}
-                            <span className="text-xs text-muted-foreground">Tunnel</span>
-                        </div>
-                    </div>
-                    
-                    {/* Keep auth status on the right */}
-                    <div className="flex items-center gap-1">
-                        {status.hasValidToken ? (
-                            <CheckCircle className="h-4 w-4 text-green-600" />
-                        ) : (
-                            <XCircle className="h-4 w-4 text-red-600" />
-                        )}
-                        <span className="text-xs text-muted-foreground">Auth</span>
-                    </div>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="text-2xl font-bold">
+                                {status.tunnelRunning ? 'Active' : 'Inactive'}
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                                {status.tunnelRunning ? 'OAuth ready' : 'Starting...'}
+                            </p>
+                        </CardContent>
+                    </Card>
                 </div>
 
                 {/* Main action */}
