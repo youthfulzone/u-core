@@ -14,6 +14,7 @@ import { Link, usePage } from '@inertiajs/react';
 import { BookOpen, Folder, LayoutGrid, Menu, Search } from 'lucide-react';
 import AppLogo from './app-logo';
 import AppLogoIcon from './app-logo-icon';
+import GlobalStatusBar from '@/components/global-status-bar';
 
 const mainNavItems: NavItem[] = [
     {
@@ -124,7 +125,10 @@ export function AppHeader({ breadcrumbs = [] }: AppHeaderProps) {
                         </NavigationMenu>
                     </div>
 
-                    <div className="ml-auto flex items-center space-x-2">
+                    <div className="ml-auto flex items-center space-x-4">
+                        {/* Global Status Bar - compact version for header */}
+                        <GlobalStatusBar compact className="flex" />
+                        
                         <div className="relative flex items-center space-x-1">
                             <Button variant="ghost" size="icon" className="group h-9 w-9 cursor-pointer">
                                 <Search className="!size-5 opacity-80 group-hover:opacity-100" />

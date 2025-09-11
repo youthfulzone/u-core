@@ -44,6 +44,12 @@ class OptimizedInertiaMiddleware extends Middleware
             'flash' => fn () => $this->getFlashData($request),
             'sidebarOpen' => fn () => $this->getSidebarState($request),
             
+            // Global status data for all pages
+            'sessionActive' => fn () => $this->getSessionActiveStatus($request),
+            'authenticationStatusText' => fn () => $this->getAuthenticationStatusText($request),
+            'apiCallStatus' => fn () => $this->getApiCallStatus($request),
+            'tunnelStatus' => fn () => $this->getTunnelStatus($request),
+            
             // App metadata (cached)
             'app' => Cache::remember('app.metadata', 3600, fn () => [
                 'name' => config('app.name'),
@@ -105,6 +111,66 @@ class OptimizedInertiaMiddleware extends Middleware
     {
         // Default sidebar state - could be extended to read from user preferences
         return true;
+    }
+    
+    /**
+     * Get session active status
+     */
+    protected function getSessionActiveStatus(Request $request): bool
+    {
+        // Check if ANAF session is active
+        // This could be enhanced to actually check session status
+        return Cache::get('anaf.session.active', false);
+    }
+    
+    /**
+     * Get authentication status text
+     */
+    protected function getAuthenticationStatusText(Request $request): string
+    {
+        $sessionActive = $this->getSessionActiveStatus($request);
+        return $sessionActive ? 'Conectat la ANAF' : 'Deconectat de la ANAF';
+    }
+    
+    /**
+     * Get API call status
+     */
+    protected function getApiCallStatus(Request $request): ?array
+    {
+        // Get API call statistics
+        // This should be replaced with actual API call tracking
+        $calls_made = Cache::get('api.calls.made', 0);
+        $calls_limit = 100; // Default limit
+        $calls_remaining = max(0, $calls_limit - $calls_made);
+        
+        return [
+            'calls_made' => $calls_made,
+            'calls_limit' => $calls_limit,
+            'calls_remaining' => $calls_remaining,
+            'reset_at' => now()->endOfDay()->toISOString(),
+        ];
+    }
+    
+    /**
+     * Get tunnel status
+     */
+    protected function getTunnelStatus(Request $request): bool
+    {
+        // Check if cloudflared tunnel is running
+        // This could be enhanced to actually check tunnel status
+        return Cache::remember('tunnel.status', 30, function () {
+            // Simple check - look for cloudflared process
+            $output = [];
+            $return_var = 0;
+            
+            if (PHP_OS_FAMILY === 'Windows') {
+                exec('tasklist /FI "IMAGENAME eq cloudflared.exe" /FO CSV 2>nul', $output, $return_var);
+                return count($output) > 1; // Header + at least one process
+            } else {
+                exec('pgrep cloudflared', $output, $return_var);
+                return $return_var === 0;
+            }
+        });
     }
     
     /**
