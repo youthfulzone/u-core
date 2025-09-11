@@ -6,6 +6,8 @@ use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Inertia\Middleware;
+use App\Models\ApiCallTracker;
+use App\Services\AnafSpvService;
 
 /**
  * Laravel 12 optimized Inertia middleware with caching and performance improvements
@@ -114,13 +116,19 @@ class OptimizedInertiaMiddleware extends Middleware
     }
     
     /**
-     * Get session active status
+     * Get session active status using the same system as SPV pages
      */
     protected function getSessionActiveStatus(Request $request): bool
     {
-        // Check if SPV session is active
-        // This could be enhanced to actually check session status
-        return Cache::get('anaf.session.active', false);
+        try {
+            // Use the same AnafSpvService that the SPV pages use for consistency
+            $spvService = app(AnafSpvService::class);
+            $sessionStatus = $spvService->getSessionStatus();
+            return $sessionStatus['active'] ?? false;
+        } catch (\Exception $e) {
+            \Log::debug('Session status error:', ['error' => $e->getMessage()]);
+            return false;
+        }
     }
     
     /**
@@ -133,22 +141,25 @@ class OptimizedInertiaMiddleware extends Middleware
     }
     
     /**
-     * Get API call status
+     * Get API call status using the same system as SPV pages
      */
     protected function getApiCallStatus(Request $request): ?array
     {
-        // Get API call statistics
-        // This should be replaced with actual API call tracking
-        $calls_made = Cache::get('api.calls.made', 0);
-        $calls_limit = 100; // Default limit
-        $calls_remaining = max(0, $calls_limit - $calls_made);
-        
-        return [
-            'calls_made' => $calls_made,
-            'calls_limit' => $calls_limit,
-            'calls_remaining' => $calls_remaining,
-            'reset_at' => now()->endOfDay()->toISOString(),
-        ];
+        try {
+            // Use the same AnafSpvService that the SPV pages use for consistency
+            $spvService = app(AnafSpvService::class);
+            return $spvService->getApiCallStatus();
+        } catch (\Exception $e) {
+            // Fallback to default values if there's an error
+            \Log::debug('API Call Status error:', ['error' => $e->getMessage()]);
+            return [
+                'calls_made' => 0,
+                'calls_limit' => 100,
+                'calls_remaining' => 100,
+                'reset_at' => now()->endOfDay()->toISOString(),
+                'recent_errors' => [],
+            ];
+        }
     }
     
     /**
