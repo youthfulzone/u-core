@@ -5,6 +5,7 @@ import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, Sid
 import { type NavItem } from '@/types';
 import { Link } from '@inertiajs/react';
 import { BookOpen, Folder, LayoutGrid, FileText, Mail, File, Building2, Receipt } from 'lucide-react';
+import { memo, useMemo } from 'react';
 import AppLogo from './app-logo';
 
 const mainNavItems: NavItem[] = [
@@ -55,7 +56,11 @@ const footerNavItems: NavItem[] = [
     },
 ];
 
-export function AppSidebar() {
+const AppSidebarComponent = memo(function AppSidebar() {
+    // Memoize nav items to prevent unnecessary re-renders
+    const memoizedMainNavItems = useMemo(() => mainNavItems, []);
+    const memoizedFooterNavItems = useMemo(() => footerNavItems, []);
+    
     return (
         <Sidebar collapsible="icon" variant="inset">
             <SidebarHeader>
@@ -71,13 +76,15 @@ export function AppSidebar() {
             </SidebarHeader>
 
             <SidebarContent>
-                <NavMain items={mainNavItems} />
+                <NavMain items={memoizedMainNavItems} />
             </SidebarContent>
 
             <SidebarFooter>
-                <NavFooter items={footerNavItems} className="mt-auto" />
+                <NavFooter items={memoizedFooterNavItems} className="mt-auto" />
                 <NavUser />
             </SidebarFooter>
         </Sidebar>
     );
-}
+});
+
+export const AppSidebar = AppSidebarComponent;

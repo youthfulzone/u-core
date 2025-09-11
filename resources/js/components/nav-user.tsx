@@ -4,11 +4,12 @@ import { UserInfo } from '@/components/user-info';
 import { UserMenuContent } from '@/components/user-menu-content';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { type SharedData } from '@/types';
-import { usePage } from '@inertiajs/react';
 import { ChevronsUpDown } from 'lucide-react';
+import { memo } from 'react';
+import { usePageOptimized } from '@/hooks/use-page-optimized';
 
-export function NavUser() {
-    const { auth } = usePage<SharedData>().props;
+const NavUserComponent = memo(function NavUser() {
+    const { auth } = usePageOptimized<SharedData>();
     const { state } = useSidebar();
     const isMobile = useIsMobile();
 
@@ -33,4 +34,6 @@ export function NavUser() {
             </SidebarMenuItem>
         </SidebarMenu>
     );
-}
+});
+
+export const NavUser = NavUserComponent;
