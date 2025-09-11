@@ -103,7 +103,8 @@ class OptimizedInertiaMiddleware extends Middleware
      */
     protected function getSidebarState(Request $request): bool
     {
-        return $request->user()?->getSidebarState() ?? true;
+        // Default sidebar state - could be extended to read from user preferences
+        return true;
     }
     
     /**
