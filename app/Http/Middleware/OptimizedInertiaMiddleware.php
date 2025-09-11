@@ -15,7 +15,7 @@ class OptimizedInertiaMiddleware extends Middleware
     /**
      * The root template that's loaded on the first page visit.
      */
-    protected string $rootView = 'app';
+    protected $rootView = 'app';
 
     /**
      * Determines the current asset version.
