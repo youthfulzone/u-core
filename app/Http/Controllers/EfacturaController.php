@@ -4,31 +4,117 @@ namespace App\Http\Controllers;
 
 use App\Models\AnafCredential;
 use App\Models\EfacturaToken;
+use App\Models\EfacturaInvoice;
 use App\Services\AnafOAuthService;
 use App\Services\EfacturaApiService;
+use App\Services\AnafEfacturaService;
 use App\Services\CloudflaredService;
+use App\Services\EfacturaTokenService;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Log;
+use Carbon\Carbon;
 
 class EfacturaController extends Controller
 {
     public function __construct(
         private AnafOAuthService $oauthService,
         private EfacturaApiService $apiService,
-        private CloudflaredService $cloudflaredService
+        private AnafEfacturaService $efacturaService,
+        private CloudflaredService $cloudflaredService,
+        private EfacturaTokenService $tokenService
     ) {}
 
     public function index()
     {
         $credential = AnafCredential::active()->first();
         $token = $credential ? EfacturaToken::forClientId($credential->client_id)->active()->first() : null;
+        
+        // Build token status from existing token system
+        if ($token && $token->isValid()) {
+            $daysUntilExpiry = max(0, now()->diffInDays($token->expires_at, false));
+            $daysSinceIssued = $token->created_at->diffInDays(now());
+            $canRefresh = $daysSinceIssued >= 90; // 90-day constraint
+            
+            $status = 'active';
+            $message = "Token active, expires in {$daysUntilExpiry} days.";
+            
+            if ($daysUntilExpiry <= 7) {
+                $status = 'expiring_soon';
+                $message = "⚠️ Token expires in {$daysUntilExpiry} days!";
+            } elseif ($daysUntilExpiry <= 30) {
+                $status = 'expiring_warning';
+                $message = "Token expires in {$daysUntilExpiry} days.";
+            }
+            
+            $tokenStatus = [
+                'has_token' => true,
+                'status' => $status,
+                'token_id' => 'eft_' . substr(md5($token->id), 0, 8),
+                'issued_at' => $token->created_at->toISOString(),
+                'expires_at' => $token->expires_at->toISOString(),
+                'days_until_expiry' => $daysUntilExpiry,
+                'days_since_issued' => $daysSinceIssued,
+                'can_refresh' => $canRefresh,
+                'days_until_refresh' => $canRefresh ? 0 : (90 - $daysSinceIssued),
+                'usage_count' => 0, // Not tracked in old system
+                'last_used_at' => $token->updated_at->toISOString(),
+                'message' => $message,
+            ];
+        } else {
+            $tokenStatus = [
+                'has_token' => false,
+                'status' => 'no_token',
+                'message' => 'No active token available.'
+            ];
+        }
+        
+        // Build security dashboard from existing data
+        $allTokens = EfacturaToken::all();
+        $activeTokens = $allTokens->filter(fn($t) => $t->isValid());
+        $expiringTokens = $activeTokens->filter(fn($t) => now()->diffInDays($t->expires_at, false) <= 30);
+        
+        $securityDashboard = [
+            'active_tokens' => $activeTokens->values()->all(),
+            'expiring_tokens' => $expiringTokens->values()->all(),
+            'pending_revocations' => [], // Not available in old system
+            'total_tokens_issued' => $allTokens->count(),
+            'compromised_count' => 0, // Not tracked in old system
+        ];
+
+        // Get recent invoices for display
+        $invoices = [];
+        if ($credential) {
+            $invoices = EfacturaInvoice::forCui($credential->client_id)
+                ->orderBy('created_at', 'desc')
+                ->limit(50)
+                ->get()
+                ->map(function ($invoice) {
+                    return [
+                        '_id' => $invoice->_id,
+                        'download_id' => $invoice->download_id,
+                        'message_type' => $invoice->message_type,
+                        'invoice_number' => $invoice->invoice_number,
+                        'invoice_date' => $invoice->invoice_date?->format('d.m.Y'),
+                        'supplier_name' => $invoice->supplier_name,
+                        'customer_name' => $invoice->customer_name,
+                        'total_amount' => $invoice->total_amount,
+                        'currency' => $invoice->currency ?? 'RON',
+                        'status' => $invoice->status,
+                        'download_status' => $invoice->download_status,
+                        'created_at' => $invoice->created_at?->format('d.m.Y H:i'),
+                        'has_pdf' => !empty($invoice->pdf_content),
+                        'has_errors' => !empty($invoice->xml_errors)
+                    ];
+                });
+        }
 
         return Inertia::render('Efactura/Index', [
             'hasCredentials' => (bool) $credential,
-            'hasValidToken' => $token && $token->isValid(),
-            'tokenExpiresAt' => $token?->expires_at?->toISOString(),
-            'tunnelRunning' => $this->cloudflaredService->isRunning()
+            'tokenStatus' => $tokenStatus,
+            'securityDashboard' => $securityDashboard,
+            'tunnelRunning' => $this->cloudflaredService->isRunning(),
+            'invoices' => $invoices
         ])->with([
             'tunnelStatus' => $this->cloudflaredService->isRunning()
         ]);
@@ -111,10 +197,10 @@ class EfacturaController extends Controller
                 $credential->redirect_uri
             );
 
-            // Store the tokens (this will replace any existing active token)
-            $oauthService->storeToken($tokenData, $credential->client_id);
+            // Use the new token service to generate and store tokens securely
+            $result = $this->tokenService->generateToken($code);
 
-            return redirect()->route('efactura.index')->with('success', 'Successfully authenticated with ANAF');
+            return redirect()->route('efactura.index')->with('success', 'Successfully authenticated with ANAF. Token expires in ' . $result['days_until_expiry'] . ' days.');
 
         } catch (\Exception $e) {
             Log::error('OAuth callback failed', ['error' => $e->getMessage()]);
@@ -132,11 +218,49 @@ class EfacturaController extends Controller
         
         $credential = AnafCredential::active()->first();
         $token = $credential ? EfacturaToken::forClientId($credential->client_id)->active()->first() : null;
+        
+        // Build token status from existing token system  
+        if ($token && $token->isValid()) {
+            $daysUntilExpiry = max(0, now()->diffInDays($token->expires_at, false));
+            $daysSinceIssued = $token->created_at->diffInDays(now());
+            $canRefresh = $daysSinceIssued >= 90;
+            
+            $status = 'active';
+            $message = "Token active, expires in {$daysUntilExpiry} days.";
+            
+            if ($daysUntilExpiry <= 7) {
+                $status = 'expiring_soon';
+                $message = "⚠️ Token expires in {$daysUntilExpiry} days!";
+            } elseif ($daysUntilExpiry <= 30) {
+                $status = 'expiring_warning';
+                $message = "Token expires in {$daysUntilExpiry} days.";
+            }
+            
+            $tokenStatus = [
+                'has_token' => true,
+                'status' => $status,
+                'token_id' => 'eft_' . substr(md5($token->id), 0, 8),
+                'issued_at' => $token->created_at->toISOString(),
+                'expires_at' => $token->expires_at->toISOString(),
+                'days_until_expiry' => $daysUntilExpiry,
+                'days_since_issued' => $daysSinceIssued,
+                'can_refresh' => $canRefresh,
+                'days_until_refresh' => $canRefresh ? 0 : (90 - $daysSinceIssued),
+                'usage_count' => 0,
+                'last_used_at' => $token->updated_at->toISOString(),
+                'message' => $message,
+            ];
+        } else {
+            $tokenStatus = [
+                'has_token' => false,
+                'status' => 'no_token',
+                'message' => 'No active token available.'
+            ];
+        }
 
         return response()->json([
             'hasCredentials' => (bool) $credential,
-            'hasValidToken' => $token && $token->isValid(),
-            'tokenExpiresAt' => $token?->expires_at?->toISOString(),
+            'tokenStatus' => $tokenStatus,
             'cloudflaredStatus' => $this->cloudflaredService->getStatus()
         ]);
     }
@@ -150,13 +274,227 @@ class EfacturaController extends Controller
         }
     }
 
+    public function refreshToken()
+    {
+        try {
+            $result = $this->tokenService->refreshToken();
+            
+            return response()->json([
+                'success' => true,
+                'message' => 'Token refreshed successfully. New token expires in ' . $result['days_until_expiry'] . ' days.',
+                'tokenStatus' => $this->tokenService->getTokenStatus()
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Token refresh failed', ['error' => $e->getMessage()]);
+            return response()->json(['error' => $e->getMessage()], 400);
+        }
+    }
+
+    public function markTokenCompromised(Request $request)
+    {
+        $request->validate([
+            'token_id' => 'required|string',
+            'reason' => 'required|string|max:500'
+        ]);
+
+        try {
+            $this->tokenService->markTokenAsCompromised(
+                $request->token_id,
+                $request->reason
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Token marked as compromised. ANAF revocation request has been generated.'
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to mark token as compromised', ['error' => $e->getMessage()]);
+            return response()->json(['error' => $e->getMessage()], 400);
+        }
+    }
+
     public function revoke()
     {
         try {
+            // Note: This is for backwards compatibility
+            // New tokens should be marked as compromised instead for proper audit trail
             $this->oauthService->revokeToken();
             return response()->json(['success' => true]);
         } catch (\Exception $e) {
             Log::error('Token revocation failed', ['error' => $e->getMessage()]);
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Sync messages from ANAF and store them
+     */
+    public function syncMessages(Request $request)
+    {
+        $request->validate([
+            'days' => 'integer|min:1|max:60',
+            'filter' => 'nullable|in:E,T,P,R'
+        ]);
+
+        try {
+            $credential = AnafCredential::active()->first();
+            if (!$credential) {
+                return response()->json(['error' => 'No active ANAF credentials found'], 400);
+            }
+
+            $days = $request->get('days', 30);
+            $filter = $request->get('filter');
+            
+            $endDate = Carbon::now();
+            $startDate = Carbon::now()->subDays($days);
+
+            // Get messages from ANAF
+            $messages = $this->efacturaService->getAllMessagesPaginated(
+                $credential->client_id,
+                $startDate,
+                $endDate,
+                $filter
+            );
+
+            $syncedCount = 0;
+            $errorCount = 0;
+
+            foreach ($messages as $message) {
+                try {
+                    // Check if message already exists
+                    $existing = EfacturaInvoice::where('download_id', $message['id_descarcare'])->first();
+                    if ($existing) {
+                        continue;
+                    }
+
+                    // Download and get complete data structure for atomic MongoDB storage
+                    $downloadData = $this->efacturaService->downloadMessage($message['id_descarcare'], $message);
+                    
+                    $invoiceData = $downloadData['invoice_data'];
+
+                    // Store in database atomically with all content in MongoDB
+                    EfacturaInvoice::create([
+                        'cui' => $credential->client_id,
+                        'download_id' => $message['id_descarcare'],
+                        'message_type' => $message['tip'],
+                        'invoice_number' => $invoiceData['invoice_number'] ?? null,
+                        'invoice_date' => $invoiceData['issue_date'] ?? null,
+                        'supplier_name' => $invoiceData['supplier_name'] ?? null,
+                        'supplier_tax_id' => $invoiceData['supplier_tax_id'] ?? $message['cif_emitent'],
+                        'customer_name' => $invoiceData['customer_name'] ?? null,
+                        'customer_tax_id' => $invoiceData['customer_tax_id'] ?? $message['cif_beneficiar'],
+                        'total_amount' => $invoiceData['total_amount'] ?? 0,
+                        'currency' => $invoiceData['currency'] ?? 'RON',
+                        'xml_content' => $downloadData['xml_content'],
+                        'xml_signature' => $downloadData['xml_signature'],
+                        'xml_errors' => $downloadData['xml_errors'],
+                        'zip_content' => $downloadData['zip_content'],
+                        'status' => $invoiceData['status'] ?? 'synced',
+                        'download_status' => 'downloaded',
+                        'downloaded_at' => $downloadData['downloaded_at'],
+                        'archived_at' => now(),
+                        'file_size' => $downloadData['file_size']
+                    ]);
+
+                    $syncedCount++;
+                } catch (\Exception $e) {
+                    Log::error('Failed to sync message', [
+                        'message_id' => $message['id_descarcare'],
+                        'error' => $e->getMessage()
+                    ]);
+                    $errorCount++;
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'synced_count' => $syncedCount,
+                'error_count' => $errorCount,
+                'total_messages' => count($messages)
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Message sync failed', ['error' => $e->getMessage()]);
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Download an invoice as PDF
+     */
+    public function downloadPDF(Request $request)
+    {
+        $request->validate([
+            'invoice_id' => 'required|string'
+        ]);
+
+        try {
+            $invoice = EfacturaInvoice::where('_id', $request->invoice_id)->first();
+            if (!$invoice) {
+                return response()->json(['error' => 'Invoice not found'], 404);
+            }
+
+            // Check if PDF already exists
+            if ($invoice->pdf_content) {
+                return response($invoice->pdf_content, 200, [
+                    'Content-Type' => 'application/pdf',
+                    'Content-Disposition' => 'attachment; filename="factura_' . $invoice->invoice_number . '.pdf"'
+                ]);
+            }
+
+            // Generate PDF from XML
+            if (!$invoice->xml_content) {
+                return response()->json(['error' => 'No XML content available for PDF conversion'], 400);
+            }
+
+            $pdfContent = $this->efacturaService->convertToPDF($invoice->xml_content);
+            
+            // Save PDF content for future use
+            $invoice->update(['pdf_content' => $pdfContent]);
+
+            return response($pdfContent, 200, [
+                'Content-Type' => 'application/pdf',
+                'Content-Disposition' => 'attachment; filename="factura_' . $invoice->invoice_number . '.pdf"'
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('PDF download failed', [
+                'invoice_id' => $request->invoice_id,
+                'error' => $e->getMessage()
+            ]);
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * View invoice XML
+     */
+    public function viewXML(Request $request)
+    {
+        $request->validate([
+            'invoice_id' => 'required|string'
+        ]);
+
+        try {
+            $invoice = EfacturaInvoice::where('_id', $request->invoice_id)->first();
+            if (!$invoice) {
+                return response()->json(['error' => 'Invoice not found'], 404);
+            }
+
+            if (!$invoice->xml_content) {
+                return response()->json(['error' => 'No XML content available'], 400);
+            }
+
+            return response($invoice->xml_content, 200, [
+                'Content-Type' => 'application/xml',
+                'Content-Disposition' => 'inline; filename="factura_' . $invoice->invoice_number . '.xml"'
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('XML view failed', [
+                'invoice_id' => $request->invoice_id,
+                'error' => $e->getMessage()
+            ]);
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }
