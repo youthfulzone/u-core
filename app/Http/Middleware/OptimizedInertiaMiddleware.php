@@ -118,7 +118,7 @@ class OptimizedInertiaMiddleware extends Middleware
      */
     protected function getSessionActiveStatus(Request $request): bool
     {
-        // Check if ANAF session is active
+        // Check if SPV session is active
         // This could be enhanced to actually check session status
         return Cache::get('anaf.session.active', false);
     }
@@ -129,7 +129,7 @@ class OptimizedInertiaMiddleware extends Middleware
     protected function getAuthenticationStatusText(Request $request): string
     {
         $sessionActive = $this->getSessionActiveStatus($request);
-        return $sessionActive ? 'Conectat la ANAF' : 'Deconectat de la ANAF';
+        return $sessionActive ? 'Conectat la SPV' : 'Deconectat de la SPV';
     }
     
     /**

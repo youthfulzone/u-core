@@ -55,7 +55,7 @@ const GlobalStatusBar = memo(function GlobalStatusBar({ className = '', compact 
                 return;
             }
             
-            // If no session, open ANAF authentication page
+            // If no session, open SPV authentication page
             const authUrl = 'https://webserviced.anaf.ro/SPVWS2/rest/listaMesaje?zile=60';
             const authWindow = window.open(authUrl, '_blank', 'width=1200,height=800');
             
@@ -77,15 +77,15 @@ const GlobalStatusBar = memo(function GlobalStatusBar({ className = '', compact 
                 {/* Compact Tunnel Status */}
                 <Icon 
                     iconNode={tunnelStatus ? Wifi : WifiOff} 
-                    className={`h-4 w-4 ${tunnelStatus ? 'text-green-500' : 'text-red-500'}`} 
+                    className={`h-4 w-4 ${tunnelStatus ? 'text-green-500' : 'text-orange-500'}`} 
                     title={tunnelStatus ? 'Tunnel: Connected' : 'Tunnel: Disconnected'}
                 />
                 
-                {/* Compact ANAF Status */}
+                {/* Compact SPV Status */}
                 <Icon 
                     iconNode={sessionActive ? Wifi : WifiOff} 
                     className={`h-4 w-4 ${sessionActive ? 'text-green-500' : 'text-orange-500'}`}
-                    title={sessionActive ? 'ANAF: Connected' : 'ANAF: Disconnected'}
+                    title={sessionActive ? 'SPV: Connected' : 'SPV: Disconnected'}
                 />
                 
                 {/* Compact API Counter */}
@@ -121,21 +121,21 @@ const GlobalStatusBar = memo(function GlobalStatusBar({ className = '', compact 
             <div className="flex items-center gap-1">
                 <Icon 
                     iconNode={tunnelStatus ? Wifi : WifiOff} 
-                    className={`h-4 w-4 ${tunnelStatus ? 'text-green-500' : 'text-red-500'}`} 
+                    className={`h-4 w-4 ${tunnelStatus ? 'text-green-500' : 'text-orange-500'}`} 
                 />
                 <div className="text-xs text-muted-foreground">
                     <span className="font-medium text-foreground">Tunnel</span>
                 </div>
             </div>
             
-            {/* ANAF WiFi Status */}
+            {/* SPV WiFi Status */}
             <div className="flex items-center gap-1">
                 <Icon 
                     iconNode={sessionActive ? Wifi : WifiOff} 
                     className={`h-4 w-4 ${sessionActive ? 'text-green-500' : 'text-orange-500'}`} 
                 />
                 <div className="text-xs text-muted-foreground">
-                    <span className="font-medium text-foreground">ANAF</span>
+                    <span className="font-medium text-foreground">SPV</span>
                 </div>
             </div>
             
