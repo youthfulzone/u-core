@@ -33,6 +33,7 @@ interface SecurityDashboard {
 
 interface Invoice {
     _id: string;
+    cui?: string;
     download_id: string;
     message_type: string;
     invoice_number: string;
@@ -71,6 +72,7 @@ export default function Index({
     });
     const [loading, setLoading] = useState(false);
     const [syncing, setSyncing] = useState(false);
+    const [syncResults, setSyncResults] = useState<any>(null);
     const [downloadingPdf, setDownloadingPdf] = useState<string | null>(null);
 
     // No automatic status polling - status comes from server-side render
@@ -174,6 +176,7 @@ export default function Index({
 
     const handleSyncMessages = async () => {
         setSyncing(true);
+        setSyncResults(null);
         try {
             const response = await fetch('/efactura/sync-messages', {
                 method: 'POST',
@@ -186,7 +189,11 @@ export default function Index({
             
             const data = await response.json();
             if (data.success) {
-                window.location.reload(); // Reload to show new invoices
+                setSyncResults(data.results);
+                // Show results for 5 seconds then reload
+                setTimeout(() => {
+                    window.location.reload();
+                }, 5000);
             } else {
                 alert(data.error || 'Failed to sync messages');
             }
@@ -344,6 +351,43 @@ export default function Index({
                         )}
                     </div>
                 </div>
+                {/* Sync Results Display */}
+                {syncResults && (
+                    <div className="relative overflow-hidden rounded-xl border border-sidebar-border/70 dark:border-sidebar-border bg-muted/50 p-4">
+                        <h3 className="font-semibold mb-3">Rezultate sincronizare</h3>
+                        <div className="space-y-2">
+                            <p className="text-sm">
+                                Total CUI-uri procesate: <span className="font-semibold">{syncResults.total_cuis}</span>
+                            </p>
+                            <p className="text-sm">
+                                Total facturi sincronizate: <span className="font-semibold text-green-600">{syncResults.total_synced}</span>
+                            </p>
+                            {syncResults.total_errors > 0 && (
+                                <p className="text-sm">
+                                    Total erori: <span className="font-semibold text-red-600">{syncResults.total_errors}</span>
+                                </p>
+                            )}
+                            {syncResults.synced_by_cui && syncResults.synced_by_cui.length > 0 && (
+                                <div className="mt-3 space-y-1">
+                                    <p className="text-sm font-medium">Detalii per CUI:</p>
+                                    {syncResults.synced_by_cui.map((cui: any, index: number) => (
+                                        <div key={index} className="text-xs pl-4">
+                                            <span className="font-mono">{cui.cui}</span> - {cui.company_name}: 
+                                            {cui.error ? (
+                                                <span className="text-red-600 ml-2">{cui.error}</span>
+                                            ) : (
+                                                <span className="ml-2">
+                                                    {cui.synced} din {cui.messages_found} facturi
+                                                </span>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+                
                 <div className="relative min-h-[100vh] flex-1 overflow-hidden rounded-xl border border-sidebar-border/70 md:min-h-min dark:border-sidebar-border">
                     {/* Invoices table */}
                     <div className="p-6">
@@ -364,14 +408,15 @@ export default function Index({
                                 <table className="w-full table-fixed">
                                     <thead className="border-b bg-muted/50">
                                         <tr>
-                                            <th className="text-left p-4 font-semibold text-sm w-[120px]">Tip</th>
-                                            <th className="text-left p-4 font-semibold text-sm w-[140px]">Nr. factură</th>
-                                            <th className="text-left p-4 font-semibold text-sm w-[100px]">Data</th>
-                                            <th className="text-left p-4 font-semibold text-sm w-[180px]">Furnizor</th>
-                                            <th className="text-left p-4 font-semibold text-sm w-[180px]">Client</th>
-                                            <th className="text-left p-4 font-semibold text-sm w-[100px]">Valoare</th>
-                                            <th className="text-left p-4 font-semibold text-sm w-[120px]">Status</th>
-                                            <th className="text-left p-4 font-semibold text-sm w-[140px]">Acțiuni</th>
+                                            <th className="text-left p-4 font-semibold text-sm w-[80px]">CUI</th>
+                                            <th className="text-left p-4 font-semibold text-sm w-[100px]">Tip</th>
+                                            <th className="text-left p-4 font-semibold text-sm w-[120px]">Nr. factură</th>
+                                            <th className="text-left p-4 font-semibold text-sm w-[90px]">Data</th>
+                                            <th className="text-left p-4 font-semibold text-sm w-[160px]">Furnizor</th>
+                                            <th className="text-left p-4 font-semibold text-sm w-[160px]">Client</th>
+                                            <th className="text-left p-4 font-semibold text-sm w-[90px]">Valoare</th>
+                                            <th className="text-left p-4 font-semibold text-sm w-[100px]">Status</th>
+                                            <th className="text-left p-4 font-semibold text-sm w-[120px]">Acțiuni</th>
                                         </tr>
                                     </thead>
                                     <tbody className="transition-opacity duration-200 ease-in-out opacity-100">
@@ -380,34 +425,39 @@ export default function Index({
                                                 key={invoice._id} 
                                                 className={`border-b hover:bg-muted/30 transition-colors duration-200 ease-in-out ${index % 2 === 0 ? 'bg-background' : 'bg-muted/10'}`}
                                             >
-                                                <td className="p-4 align-top w-[120px]">
+                                                <td className="p-4 align-top w-[80px]">
+                                                    <div className="text-xs font-mono">
+                                                        {invoice.cui || 'N/A'}
+                                                    </div>
+                                                </td>
+                                                <td className="p-4 align-top w-[100px]">
                                                     <Badge variant={getMessageTypeBadge(invoice.message_type)} className="text-xs">
                                                         {invoice.message_type === 'FACTURA TRIMISA' ? 'Trimisă' :
                                                          invoice.message_type === 'FACTURA PRIMITA' ? 'Primită' :
                                                          invoice.message_type === 'ERORI FACTURA' ? 'Erori' : invoice.message_type}
                                                     </Badge>
                                                 </td>
-                                                <td className="p-4 align-top w-[140px]">
+                                                <td className="p-4 align-top w-[120px]">
                                                     <div className="text-sm font-semibold">
                                                         {invoice.invoice_number || 'N/A'}
                                                     </div>
                                                 </td>
-                                                <td className="p-4 align-top w-[100px]">
+                                                <td className="p-4 align-top w-[90px]">
                                                     <div className="text-sm">
                                                         {invoice.invoice_date || 'N/A'}
                                                     </div>
                                                 </td>
-                                                <td className="p-4 align-top w-[180px]">
+                                                <td className="p-4 align-top w-[160px]">
                                                     <div className="text-sm truncate" title={invoice.supplier_name}>
                                                         {invoice.supplier_name || 'N/A'}
                                                     </div>
                                                 </td>
-                                                <td className="p-4 align-top w-[180px]">
+                                                <td className="p-4 align-top w-[160px]">
                                                     <div className="text-sm truncate" title={invoice.customer_name}>
                                                         {invoice.customer_name || 'N/A'}
                                                     </div>
                                                 </td>
-                                                <td className="p-4 align-top w-[100px]">
+                                                <td className="p-4 align-top w-[90px]">
                                                     <div className="text-sm font-medium">
                                                         {invoice.total_amount > 0 ? 
                                                             `${invoice.total_amount.toFixed(2)} ${invoice.currency}` : 
@@ -415,7 +465,7 @@ export default function Index({
                                                         }
                                                     </div>
                                                 </td>
-                                                <td className="p-4 align-top w-[120px]">
+                                                <td className="p-4 align-top w-[100px]">
                                                     <div className="flex items-center gap-1">
                                                         <div className="text-xs">
                                                             {invoice.download_status === 'downloaded' && (
@@ -427,7 +477,7 @@ export default function Index({
                                                         </div>
                                                     </div>
                                                 </td>
-                                                <td className="p-4 align-top w-[140px]">
+                                                <td className="p-4 align-top w-[120px]">
                                                     <div className="flex items-center gap-1">
                                                         <Button
                                                             onClick={() => handleDownloadPDF(invoice._id)}

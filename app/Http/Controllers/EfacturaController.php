@@ -82,32 +82,29 @@ class EfacturaController extends Controller
             'compromised_count' => 0, // Not tracked in old system
         ];
 
-        // Get recent invoices for display
-        $invoices = [];
-        if ($credential) {
-            $invoices = EfacturaInvoice::forCui($credential->client_id)
-                ->orderBy('created_at', 'desc')
-                ->limit(50)
-                ->get()
-                ->map(function ($invoice) {
-                    return [
-                        '_id' => $invoice->_id,
-                        'download_id' => $invoice->download_id,
-                        'message_type' => $invoice->message_type,
-                        'invoice_number' => $invoice->invoice_number,
-                        'invoice_date' => $invoice->invoice_date?->format('d.m.Y'),
-                        'supplier_name' => $invoice->supplier_name,
-                        'customer_name' => $invoice->customer_name,
-                        'total_amount' => $invoice->total_amount,
-                        'currency' => $invoice->currency ?? 'RON',
-                        'status' => $invoice->status,
-                        'download_status' => $invoice->download_status,
-                        'created_at' => $invoice->created_at?->format('d.m.Y H:i'),
-                        'has_pdf' => !empty($invoice->pdf_content),
-                        'has_errors' => !empty($invoice->xml_errors)
-                    ];
-                });
-        }
+        // Get recent invoices for display from all CUIs
+        $invoices = EfacturaInvoice::orderBy('created_at', 'desc')
+            ->limit(100)
+            ->get()
+            ->map(function ($invoice) {
+                return [
+                    '_id' => $invoice->_id,
+                    'cui' => $invoice->cui, // Include CUI to identify which company
+                    'download_id' => $invoice->download_id,
+                    'message_type' => $invoice->message_type,
+                    'invoice_number' => $invoice->invoice_number,
+                    'invoice_date' => $invoice->invoice_date?->format('d.m.Y'),
+                    'supplier_name' => $invoice->supplier_name,
+                    'customer_name' => $invoice->customer_name,
+                    'total_amount' => $invoice->total_amount,
+                    'currency' => $invoice->currency ?? 'RON',
+                    'status' => $invoice->status,
+                    'download_status' => $invoice->download_status,
+                    'created_at' => $invoice->created_at?->format('d.m.Y H:i'),
+                    'has_pdf' => !empty($invoice->pdf_content),
+                    'has_errors' => !empty($invoice->xml_errors)
+                ];
+            });
 
         return Inertia::render('Efactura/Index', [
             'hasCredentials' => (bool) $credential,
@@ -327,13 +324,14 @@ class EfacturaController extends Controller
     }
 
     /**
-     * Sync messages from ANAF and store them
+     * Sync messages from ANAF and store them for all CUIs
      */
     public function syncMessages(Request $request)
     {
         $request->validate([
             'days' => 'integer|min:1|max:60',
-            'filter' => 'nullable|in:E,T,P,R'
+            'filter' => 'nullable|in:E,T,P,R',
+            'cui' => 'nullable|string' // Optional: sync only specific CUI
         ]);
 
         try {
@@ -344,73 +342,142 @@ class EfacturaController extends Controller
 
             $days = $request->get('days', 30);
             $filter = $request->get('filter');
+            $specificCui = $request->get('cui');
             
             $endDate = Carbon::now();
             $startDate = Carbon::now()->subDays($days);
 
-            // Get messages from ANAF
-            $messages = $this->efacturaService->getAllMessagesPaginated(
-                $credential->client_id,
-                $startDate,
-                $endDate,
-                $filter
-            );
+            // Get list of CUIs to sync
+            $cuisToSync = [];
+            
+            if ($specificCui) {
+                // Sync only the specified CUI
+                $cuisToSync[] = $specificCui;
+            } else {
+                // Get all companies with valid CUIs from the database
+                $companies = \App\Models\Company::whereNotNull('cui')
+                    ->where('cui', '!=', '')
+                    ->get(['cui', 'denumire']);
+                
+                foreach ($companies as $company) {
+                    // Validate CUI format (should be numeric)
+                    if (preg_match('/^[0-9]{6,10}$/', $company->cui)) {
+                        $cuisToSync[] = [
+                            'cui' => $company->cui,
+                            'name' => $company->denumire
+                        ];
+                    }
+                }
+            }
 
-            $syncedCount = 0;
-            $errorCount = 0;
+            if (empty($cuisToSync)) {
+                return response()->json([
+                    'error' => 'No valid CUIs found to sync. Please add companies with valid Romanian CUIs first.'
+                ], 400);
+            }
 
-            foreach ($messages as $message) {
+            $results = [
+                'total_cuis' => count($cuisToSync),
+                'synced_by_cui' => [],
+                'total_synced' => 0,
+                'total_errors' => 0,
+                'total_messages' => 0
+            ];
+
+            // Process each CUI
+            foreach ($cuisToSync as $cuiInfo) {
+                $cui = is_array($cuiInfo) ? $cuiInfo['cui'] : $cuiInfo;
+                $companyName = is_array($cuiInfo) ? $cuiInfo['name'] : $cui;
+                
                 try {
-                    // Check if message already exists
-                    $existing = EfacturaInvoice::where('download_id', $message['id_descarcare'])->first();
-                    if ($existing) {
-                        continue;
+                    // Get messages from ANAF for this CUI
+                    $messages = $this->efacturaService->getAllMessagesPaginated(
+                        $cui,
+                        $startDate,
+                        $endDate,
+                        $filter
+                    );
+
+                    $cuiSyncedCount = 0;
+                    $cuiErrorCount = 0;
+
+                    foreach ($messages as $message) {
+                        try {
+                            // Check if message already exists
+                            $existing = EfacturaInvoice::where('download_id', $message['id_descarcare'])->first();
+                            if ($existing) {
+                                continue;
+                            }
+
+                            // Download and get complete data structure for atomic MongoDB storage
+                            $downloadData = $this->efacturaService->downloadMessage($message['id_descarcare'], $message);
+                            
+                            $invoiceData = $downloadData['invoice_data'];
+
+                            // Store in database atomically with all content in MongoDB
+                            EfacturaInvoice::create([
+                                'cui' => $cui, // Store the actual CUI, not the encrypted one
+                                'download_id' => $message['id_descarcare'],
+                                'message_type' => $message['tip'],
+                                'invoice_number' => $invoiceData['invoice_number'] ?? null,
+                                'invoice_date' => $invoiceData['issue_date'] ?? null,
+                                'supplier_name' => $invoiceData['supplier_name'] ?? null,
+                                'supplier_tax_id' => $invoiceData['supplier_tax_id'] ?? $message['cif_emitent'],
+                                'customer_name' => $invoiceData['customer_name'] ?? null,
+                                'customer_tax_id' => $invoiceData['customer_tax_id'] ?? $message['cif_beneficiar'],
+                                'total_amount' => $invoiceData['total_amount'] ?? 0,
+                                'currency' => $invoiceData['currency'] ?? 'RON',
+                                'xml_content' => $downloadData['xml_content'],
+                                'xml_signature' => $downloadData['xml_signature'],
+                                'xml_errors' => $downloadData['xml_errors'],
+                                'zip_content' => $downloadData['zip_content'],
+                                'status' => $invoiceData['status'] ?? 'synced',
+                                'download_status' => 'downloaded',
+                                'downloaded_at' => $downloadData['downloaded_at'],
+                                'archived_at' => now(),
+                                'file_size' => $downloadData['file_size']
+                            ]);
+
+                            $cuiSyncedCount++;
+                        } catch (\Exception $e) {
+                            Log::error('Failed to sync message', [
+                                'cui' => $cui,
+                                'message_id' => $message['id_descarcare'],
+                                'error' => $e->getMessage()
+                            ]);
+                            $cuiErrorCount++;
+                        }
                     }
 
-                    // Download and get complete data structure for atomic MongoDB storage
-                    $downloadData = $this->efacturaService->downloadMessage($message['id_descarcare'], $message);
-                    
-                    $invoiceData = $downloadData['invoice_data'];
+                    $results['synced_by_cui'][] = [
+                        'cui' => $cui,
+                        'company_name' => $companyName,
+                        'messages_found' => count($messages),
+                        'synced' => $cuiSyncedCount,
+                        'errors' => $cuiErrorCount
+                    ];
 
-                    // Store in database atomically with all content in MongoDB
-                    EfacturaInvoice::create([
-                        'cui' => $credential->client_id,
-                        'download_id' => $message['id_descarcare'],
-                        'message_type' => $message['tip'],
-                        'invoice_number' => $invoiceData['invoice_number'] ?? null,
-                        'invoice_date' => $invoiceData['issue_date'] ?? null,
-                        'supplier_name' => $invoiceData['supplier_name'] ?? null,
-                        'supplier_tax_id' => $invoiceData['supplier_tax_id'] ?? $message['cif_emitent'],
-                        'customer_name' => $invoiceData['customer_name'] ?? null,
-                        'customer_tax_id' => $invoiceData['customer_tax_id'] ?? $message['cif_beneficiar'],
-                        'total_amount' => $invoiceData['total_amount'] ?? 0,
-                        'currency' => $invoiceData['currency'] ?? 'RON',
-                        'xml_content' => $downloadData['xml_content'],
-                        'xml_signature' => $downloadData['xml_signature'],
-                        'xml_errors' => $downloadData['xml_errors'],
-                        'zip_content' => $downloadData['zip_content'],
-                        'status' => $invoiceData['status'] ?? 'synced',
-                        'download_status' => 'downloaded',
-                        'downloaded_at' => $downloadData['downloaded_at'],
-                        'archived_at' => now(),
-                        'file_size' => $downloadData['file_size']
-                    ]);
+                    $results['total_synced'] += $cuiSyncedCount;
+                    $results['total_errors'] += $cuiErrorCount;
+                    $results['total_messages'] += count($messages);
 
-                    $syncedCount++;
                 } catch (\Exception $e) {
-                    Log::error('Failed to sync message', [
-                        'message_id' => $message['id_descarcare'],
+                    Log::error('Failed to sync CUI', [
+                        'cui' => $cui,
                         'error' => $e->getMessage()
                     ]);
-                    $errorCount++;
+                    
+                    $results['synced_by_cui'][] = [
+                        'cui' => $cui,
+                        'company_name' => $companyName,
+                        'error' => $e->getMessage()
+                    ];
                 }
             }
 
             return response()->json([
                 'success' => true,
-                'synced_count' => $syncedCount,
-                'error_count' => $errorCount,
-                'total_messages' => count($messages)
+                'results' => $results
             ]);
 
         } catch (\Exception $e) {

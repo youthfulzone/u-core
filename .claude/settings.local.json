@@ -11,7 +11,13 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git push:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "mcp__laravel-boost__tinker",
+      "mcp__laravel-boost__get-absolute-url",
+      "mcp__laravel-boost__application-info",
+      "Bash(del \"C:\\Users\\TheOldBuffet\\Herd\\u-core\\test_spv_service.php\")",
+      "Bash(del \"C:\\Users\\TheOldBuffet\\Herd\\u-core\\app\\Console\\Commands\\TestAnafSpvService.php\")",
+      "mcp__laravel-boost__database-schema"
     ],
     "deny": [],
     "ask": [],

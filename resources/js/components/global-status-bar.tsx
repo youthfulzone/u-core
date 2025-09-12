@@ -89,9 +89,13 @@ const GlobalStatusBar = memo(function GlobalStatusBar({ className = '', compact 
                 />
                 
                 {/* Compact API Counter */}
-                {apiCallStatus && (
-                    <span className="text-xs font-medium text-muted-foreground" title="API Calls Remaining">
+                {apiCallStatus ? (
+                    <span className="text-xs font-medium text-muted-foreground" title={`API Calls: ${apiCallStatus.calls_remaining} remaining of ${apiCallStatus.calls_limit}`}>
                         {apiCallStatus.calls_remaining}
+                    </span>
+                ) : (
+                    <span className="text-xs font-medium text-muted-foreground" title="API Status: Not available">
+                        --
                     </span>
                 )}
                 
@@ -140,10 +144,16 @@ const GlobalStatusBar = memo(function GlobalStatusBar({ className = '', compact 
             </div>
             
             {/* API Call Counter */}
-            {apiCallStatus && (
+            {apiCallStatus ? (
                 <div className="flex items-center gap-1">
                     <div className="text-xs text-muted-foreground">
-                        <span className="font-medium text-foreground">{apiCallStatus.calls_remaining}</span>/{apiCallStatus.calls_remaining + apiCallStatus.calls_made} API
+                        <span className="font-medium text-foreground">{apiCallStatus.calls_remaining}</span>/{apiCallStatus.calls_limit} API
+                    </div>
+                </div>
+            ) : (
+                <div className="flex items-center gap-1">
+                    <div className="text-xs text-muted-foreground">
+                        <span className="font-medium text-foreground">--</span>/-- API
                     </div>
                 </div>
             )}
