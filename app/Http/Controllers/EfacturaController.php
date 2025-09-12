@@ -397,27 +397,46 @@ class EfacturaController extends Controller
                         $endDate,
                         $filter
                     );
+                    
+                    Log::info('Messages retrieved for CUI', [
+                        'cui' => $cui,
+                        'count' => count($messages),
+                        'first_message' => !empty($messages) ? array_keys($messages[0] ?? []) : 'no messages'
+                    ]);
 
                     $cuiSyncedCount = 0;
                     $cuiErrorCount = 0;
 
                     foreach ($messages as $message) {
                         try {
+                            // The API returns 'id' not 'id_descarcare' for the download ID
+                            $downloadId = $message['id'] ?? $message['id_descarcare'] ?? null;
+                            
+                            // Validate message structure
+                            if (!$downloadId) {
+                                Log::warning('Message missing download ID', [
+                                    'cui' => $cui,
+                                    'message' => $message
+                                ]);
+                                $cuiErrorCount++;
+                                continue;
+                            }
+                            
                             // Check if message already exists
-                            $existing = EfacturaInvoice::where('download_id', $message['id_descarcare'])->first();
+                            $existing = EfacturaInvoice::where('download_id', $downloadId)->first();
                             if ($existing) {
                                 continue;
                             }
 
                             // Download and get complete data structure for atomic MongoDB storage
-                            $downloadData = $this->efacturaService->downloadMessage($message['id_descarcare'], $message);
+                            $downloadData = $this->efacturaService->downloadMessage($downloadId, $message);
                             
                             $invoiceData = $downloadData['invoice_data'];
 
                             // Store in database atomically with all content in MongoDB
                             EfacturaInvoice::create([
                                 'cui' => $cui, // Store the actual CUI, not the encrypted one
-                                'download_id' => $message['id_descarcare'],
+                                'download_id' => $downloadId,
                                 'message_type' => $message['tip'],
                                 'invoice_number' => $invoiceData['invoice_number'] ?? null,
                                 'invoice_date' => $invoiceData['issue_date'] ?? null,
@@ -442,7 +461,7 @@ class EfacturaController extends Controller
                         } catch (\Exception $e) {
                             Log::error('Failed to sync message', [
                                 'cui' => $cui,
-                                'message_id' => $message['id_descarcare'],
+                                'message_id' => $downloadId ?? 'unknown',
                                 'error' => $e->getMessage()
                             ]);
                             $cuiErrorCount++;

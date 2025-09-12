@@ -71,6 +71,20 @@ class AnafEfacturaService
             }
 
             $data = $response->json();
+            
+            // Check for API errors
+            if (isset($data['eroare'])) {
+                Log::warning('ANAF API returned error', [
+                    'cif' => $cif,
+                    'error' => $data['eroare'],
+                    'title' => $data['titlu'] ?? null
+                ]);
+                return [
+                    'messages' => [],
+                    'currentPage' => $page,
+                    'error' => $data['eroare']
+                ];
+            }
 
             return [
                 'messages' => $data['mesaje'] ?? [],
