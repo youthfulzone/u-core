@@ -306,20 +306,32 @@ class AnafEfacturaService
         $ns = $xml->getNamespaces(true);
         
         // Get basic invoice info
-        $invoiceNumber = (string) $xml->xpath('//cbc:ID')[0] ?? 'Unknown';
-        $issueDate = (string) $xml->xpath('//cbc:IssueDate')[0] ?? null;
+        $idNodes = $xml->xpath('//cbc:ID');
+        $invoiceNumber = !empty($idNodes) ? (string) $idNodes[0] : 'Unknown';
+        
+        $dateNodes = $xml->xpath('//cbc:IssueDate');
+        $issueDate = !empty($dateNodes) ? (string) $dateNodes[0] : null;
         
         // Get supplier info
-        $supplierName = (string) $xml->xpath('//cac:AccountingSupplierParty//cbc:Name')[0] ?? 'Unknown';
-        $supplierTaxId = (string) $xml->xpath('//cac:AccountingSupplierParty//cbc:CompanyID')[0] ?? '';
+        $supplierNameNodes = $xml->xpath('//cac:AccountingSupplierParty//cbc:Name');
+        $supplierName = !empty($supplierNameNodes) ? (string) $supplierNameNodes[0] : 'Unknown';
+        
+        $supplierTaxNodes = $xml->xpath('//cac:AccountingSupplierParty//cbc:CompanyID');
+        $supplierTaxId = !empty($supplierTaxNodes) ? (string) $supplierTaxNodes[0] : '';
         
         // Get customer info
-        $customerName = (string) $xml->xpath('//cac:AccountingCustomerParty//cbc:Name')[0] ?? 'Unknown';
-        $customerTaxId = (string) $xml->xpath('//cac:AccountingCustomerParty//cbc:CompanyID')[0] ?? '';
+        $customerNameNodes = $xml->xpath('//cac:AccountingCustomerParty//cbc:Name');
+        $customerName = !empty($customerNameNodes) ? (string) $customerNameNodes[0] : 'Unknown';
+        
+        $customerTaxNodes = $xml->xpath('//cac:AccountingCustomerParty//cbc:CompanyID');
+        $customerTaxId = !empty($customerTaxNodes) ? (string) $customerTaxNodes[0] : '';
         
         // Get totals
-        $totalAmount = (float) $xml->xpath('//cac:LegalMonetaryTotal//cbc:PayableAmount')[0] ?? 0;
-        $currency = (string) $xml->xpath('//cac:LegalMonetaryTotal//cbc:PayableAmount/@currencyID')[0] ?? 'RON';
+        $totalNodes = $xml->xpath('//cac:LegalMonetaryTotal//cbc:PayableAmount');
+        $totalAmount = !empty($totalNodes) ? (float) $totalNodes[0] : 0;
+        
+        $currencyNodes = $xml->xpath('//cac:LegalMonetaryTotal//cbc:PayableAmount/@currencyID');
+        $currency = !empty($currencyNodes) ? (string) $currencyNodes[0] : 'RON';
         
         return [
             'invoice_number' => $invoiceNumber,
@@ -351,8 +363,11 @@ class AnafEfacturaService
     private function parseGenericInvoice(\SimpleXMLElement $xml): array
     {
         // Generic fallback parsing
+        $idNodes = $xml->xpath('//ID');
+        $invoiceNumber = !empty($idNodes) ? (string) $idNodes[0] : 'Generic';
+        
         return [
-            'invoice_number' => (string) $xml->xpath('//ID')[0] ?? 'Generic',
+            'invoice_number' => $invoiceNumber,
             'issue_date' => null,
             'supplier_name' => 'Unknown',
             'customer_name' => 'Unknown',

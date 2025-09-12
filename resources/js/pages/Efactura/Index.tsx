@@ -459,8 +459,8 @@ export default function Index({
                                                 </td>
                                                 <td className="p-4 align-top w-[90px]">
                                                     <div className="text-sm font-medium">
-                                                        {invoice.total_amount > 0 ? 
-                                                            `${invoice.total_amount.toFixed(2)} ${invoice.currency}` : 
+                                                        {invoice.total_amount && parseFloat(invoice.total_amount) > 0 ? 
+                                                            `${parseFloat(invoice.total_amount).toFixed(2)} ${invoice.currency}` : 
                                                             'N/A'
                                                         }
                                                     </div>
