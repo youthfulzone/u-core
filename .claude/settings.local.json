@@ -20,7 +20,8 @@
       "mcp__laravel-boost__database-schema",
       "Bash(tasklist)",
       "Bash(findstr:*)",
-      "Bash(wmic:*)"
+      "Bash(wmic:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": [],

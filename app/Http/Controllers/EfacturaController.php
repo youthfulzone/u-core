@@ -123,8 +123,10 @@ class EfacturaController extends Controller
 
     public function authenticate()
     {
-        // Ensure cloudflared is running before OAuth
-        $this->cloudflaredService->ensureRunning();
+        // Ensure cloudflared is running before OAuth (only when needed)
+        if (!$this->cloudflaredService->isRunning()) {
+            $this->cloudflaredService->start();
+        }
         
         $credential = AnafCredential::active()->first();
 
