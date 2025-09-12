@@ -21,7 +21,8 @@
       "Bash(tasklist)",
       "Bash(findstr:*)",
       "Bash(wmic:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": [],

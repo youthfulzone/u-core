@@ -170,9 +170,9 @@ class CloudflaredService
             'running' => $isRunning,
             'tunnel_url' => $isRunning ? 'https://efactura.scyte.ro' : null,
             'callback_url' => $isRunning ? 'https://efactura.scyte.ro/callback' : null,
-            'message' => $isRunning ? 'Tunnel active - OAuth ready' : 'Starting tunnel...',
-            'required' => false, // Laravel manages this automatically
-            'setup_command' => null
+            'message' => $isRunning ? 'Tunnel active - OAuth ready' : 'Tunnel stopped - click Start to enable OAuth',
+            'status' => $isRunning ? 'active' : 'stopped',
+            'last_checked' => now()->toISOString()
         ];
     }
 
