@@ -82,9 +82,15 @@ class EfacturaController extends Controller
             'compromised_count' => 0, // Not tracked in old system
         ];
 
-        // Get recent invoices for display from all CUIs
-        $invoices = EfacturaInvoice::orderBy('created_at', 'desc')
-            ->limit(100)
+        // Get recent invoices for display from all CUIs (optimized query)
+        $invoices = EfacturaInvoice::select([
+            '_id', 'cui', 'download_id', 'message_type', 'invoice_number', 
+            'invoice_date', 'supplier_name', 'customer_name', 'total_amount', 
+            'currency', 'status', 'download_status', 'created_at',
+            'pdf_content', 'xml_errors'
+        ])
+            ->orderBy('created_at', 'desc')
+            ->limit(50) // Reduced from 100 for faster loading
             ->get()
             ->map(function ($invoice) {
                 return [
@@ -110,10 +116,8 @@ class EfacturaController extends Controller
             'hasCredentials' => (bool) $credential,
             'tokenStatus' => $tokenStatus,
             'securityDashboard' => $securityDashboard,
-            'tunnelRunning' => $this->cloudflaredService->isRunning(),
+            'tunnelRunning' => false, // Don't check on every page load - too slow
             'invoices' => $invoices
-        ])->with([
-            'tunnelStatus' => $this->cloudflaredService->isRunning()
         ]);
     }
 
@@ -207,11 +211,8 @@ class EfacturaController extends Controller
 
     public function status()
     {
-        // Start tunnel check in background if not running (non-blocking)
-        if (!$this->cloudflaredService->isRunning()) {
-            // Start tunnel asynchronously without blocking
-            $this->startTunnelAsync();
-        }
+        // Don't check tunnel status on every status call - too slow
+        // Only start tunnel when actually needed (during authenticate)
         
         $credential = AnafCredential::active()->first();
         $token = $credential ? EfacturaToken::forClientId($credential->client_id)->active()->first() : null;
@@ -258,7 +259,7 @@ class EfacturaController extends Controller
         return response()->json([
             'hasCredentials' => (bool) $credential,
             'tokenStatus' => $tokenStatus,
-            'cloudflaredStatus' => $this->cloudflaredService->getStatus()
+            'cloudflaredStatus' => ['running' => false, 'message' => 'Checked only when needed']
         ]);
     }
 

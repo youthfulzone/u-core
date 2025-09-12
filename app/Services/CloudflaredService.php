@@ -21,24 +21,13 @@ class CloudflaredService
 
     public function isRunning(): bool
     {
-        // Use cached result if available and fresh
-        if (self::$statusCache !== null && (time() - self::$cacheTime) < self::CACHE_DURATION) {
+        // Use cached result if available and fresh (longer cache for performance)
+        if (self::$statusCache !== null && (time() - self::$cacheTime) < 120) { // 2 minutes cache
             return self::$statusCache;
         }
         
-        // Clear cache for fresh check
-        self::$statusCache = null;
-        
-        // Multiple check approaches for better reliability
-        
-        // 1. Check if process is running
-        $processRunning = $this->checkProcess();
-        
-        // 2. If process is running, verify tunnel is actually accessible
-        $result = false;
-        if ($processRunning) {
-            $result = $this->verifyTunnelAccess();
-        }
+        // Quick process check only - no network verification (too slow)
+        $result = $this->checkProcess();
         
         // Cache the result
         self::$statusCache = $result;
@@ -49,16 +38,7 @@ class CloudflaredService
     
     private function checkProcess(): bool
     {
-        try {
-            $pythonScript = base_path('cloudflared/tunnel.py');
-            if (file_exists($pythonScript)) {
-                $output = shell_exec("cd /d \"" . base_path('cloudflared') . "\" && python tunnel.py status 2>NUL");
-                return trim($output) === 'running';
-            }
-        } catch (\Exception $e) {
-            // Fallback to process check
-        }
-        
+        // Quick process check using Windows tasklist - much faster than Python script
         $output = shell_exec('tasklist /FI "IMAGENAME eq cloudflared.exe" /FO CSV 2>NUL');
         return $output && strpos($output, 'cloudflared.exe') !== false;
     }
