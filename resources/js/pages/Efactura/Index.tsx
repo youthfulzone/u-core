@@ -74,8 +74,35 @@ export default function Index({
     const [syncing, setSyncing] = useState(false);
     const [syncResults, setSyncResults] = useState<any>(null);
     const [downloadingPdf, setDownloadingPdf] = useState<string | null>(null);
+    const [tunnelStatus, setTunnelStatus] = useState<any>(null);
+    const [tunnelLoading, setTunnelLoading] = useState(false);
 
-    // No automatic status polling - status comes from server-side render
+    // Auto-update tunnel status every 10 seconds
+    useEffect(() => {
+        const updateTunnelStatus = async () => {
+            try {
+                const response = await fetch('/efactura/tunnel-control?action=status', {
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-TOKEN': (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement)?.content || ''
+                    }
+                });
+                const data = await response.json();
+                if (data.success) {
+                    setTunnelStatus(data.status);
+                }
+            } catch (error) {
+                console.error('Failed to update tunnel status:', error);
+            }
+        };
+
+        // Update immediately
+        updateTunnelStatus();
+        
+        // Then update every 10 seconds
+        const interval = setInterval(updateTunnelStatus, 10000);
+        return () => clearInterval(interval);
+    }, []);
     
     const breadcrumbs: BreadcrumbItem[] = [
         { href: '/dashboard', title: 'Dashboard' },
@@ -278,6 +305,44 @@ export default function Index({
         }
     };
 
+    const handleTunnelControl = async (action: 'start' | 'stop') => {
+        setTunnelLoading(true);
+        try {
+            const response = await fetch('/efactura/tunnel-control', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement)?.content || ''
+                },
+                body: JSON.stringify({ action })
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                setTunnelStatus(data.status);
+                // Show success message briefly
+                setTimeout(() => {
+                    // Refresh tunnel status
+                    const updateStatus = async () => {
+                        const statusResponse = await fetch('/efactura/tunnel-control?action=status');
+                        const statusData = await statusResponse.json();
+                        if (statusData.success) {
+                            setTunnelStatus(statusData.status);
+                        }
+                    };
+                    updateStatus();
+                }, 2000);
+            } else {
+                alert(data.message || `Failed to ${action} tunnel`);
+            }
+        } catch (error) {
+            console.error(`Failed to ${action} tunnel:`, error);
+            alert(`Failed to ${action} tunnel`);
+        } finally {
+            setTunnelLoading(false);
+        }
+    };
+
     const formatDate = (dateString?: string) => {
         if (!dateString) return 'N/A';
         const date = new Date(dateString);
@@ -313,19 +378,20 @@ export default function Index({
                                 </Button>
                             </div>
                         ) : (
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-4">
-                                    <Badge 
-                                        className="border-green-200 bg-green-50 hover:bg-green-100 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-300 flex items-center gap-1"
-                                    >
-                                        <CheckCircle className="h-3 w-3" />
-                                        Activ
-                                    </Badge>
-                                    <span className="text-sm font-medium">
-                                        Expiră în: <span className="font-semibold">{Math.floor(tokenStatus.days_until_expiry || 0)}</span> zile / {formatDate(tokenStatus.expires_at)}
-                                    </span>
-                                </div>
-                                <div className="flex items-center gap-2">
+                            <div className="space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-4">
+                                        <Badge 
+                                            className="border-green-200 bg-green-50 hover:bg-green-100 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-300 flex items-center gap-1"
+                                        >
+                                            <CheckCircle className="h-3 w-3" />
+                                            Activ
+                                        </Badge>
+                                        <span className="text-sm font-medium">
+                                            Expiră în: <span className="font-semibold">{Math.floor(tokenStatus.days_until_expiry || 0)}</span> zile / {formatDate(tokenStatus.expires_at)}
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
                                     <Button
                                         onClick={handleSyncMessages}
                                         disabled={syncing}
@@ -345,6 +411,49 @@ export default function Index({
                                     >
                                         <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
                                         {loading ? 'Se reîmprospătează...' : 'Reîmprospătează'}
+                                    </Button>
+                                </div>
+                            </div>
+                            
+                            {/* Tunnel Status Row */}
+                            <div className="flex items-center justify-between border-t pt-3 mt-3">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs text-muted-foreground">Tunnel OAuth:</span>
+                                    {tunnelStatus?.running ? (
+                                        <Badge variant="secondary" className="text-xs">
+                                            <CheckCircle className="w-3 h-3 mr-1" />
+                                            Activ
+                                        </Badge>
+                                    ) : (
+                                        <Badge variant="outline" className="text-xs">
+                                            <XCircle className="w-3 h-3 mr-1" />
+                                            Oprit
+                                        </Badge>
+                                    )}
+                                    {tunnelStatus?.tunnel_url && (
+                                        <span className="text-xs text-muted-foreground">
+                                            {tunnelStatus.tunnel_url}
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="flex items-center gap-1">
+                                    <Button
+                                        onClick={() => handleTunnelControl('start')}
+                                        disabled={tunnelLoading || tunnelStatus?.running}
+                                        size="sm"
+                                        variant="outline"
+                                        className="text-xs h-6 px-2"
+                                    >
+                                        {tunnelLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : 'Start'}
+                                    </Button>
+                                    <Button
+                                        onClick={() => handleTunnelControl('stop')}
+                                        disabled={tunnelLoading || !tunnelStatus?.running}
+                                        size="sm"
+                                        variant="outline"
+                                        className="text-xs h-6 px-2"
+                                    >
+                                        {tunnelLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : 'Stop'}
                                     </Button>
                                 </div>
                             </div>

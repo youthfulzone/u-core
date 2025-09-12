@@ -121,11 +121,52 @@ class EfacturaController extends Controller
         ]);
     }
 
+    public function tunnelControl(Request $request)
+    {
+        $action = $request->get('action', 'status');
+        
+        try {
+            switch ($action) {
+                case 'start':
+                    $success = $this->cloudflaredService->start();
+                    return response()->json([
+                        'success' => $success,
+                        'message' => $success ? 'Tunnel started successfully' : 'Failed to start tunnel',
+                        'status' => $this->cloudflaredService->getStatus()
+                    ]);
+                    
+                case 'stop':
+                    $success = $this->cloudflaredService->stop();
+                    return response()->json([
+                        'success' => $success,
+                        'message' => $success ? 'Tunnel stopped successfully' : 'Failed to stop tunnel',
+                        'status' => $this->cloudflaredService->getStatus()
+                    ]);
+                    
+                case 'status':
+                default:
+                    return response()->json([
+                        'success' => true,
+                        'status' => $this->cloudflaredService->getStatus()
+                    ]);
+            }
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error: ' . $e->getMessage(),
+                'status' => ['running' => false, 'message' => 'Error checking status']
+            ], 500);
+        }
+    }
+
     public function authenticate()
     {
         // Ensure cloudflared is running before OAuth (only when needed)
         if (!$this->cloudflaredService->isRunning()) {
-            $this->cloudflaredService->start();
+            $startResult = $this->cloudflaredService->start();
+            if (!$startResult) {
+                return response()->json(['error' => 'Failed to start tunnel. Please start it manually.'], 500);
+            }
         }
         
         $credential = AnafCredential::active()->first();
@@ -261,7 +302,7 @@ class EfacturaController extends Controller
         return response()->json([
             'hasCredentials' => (bool) $credential,
             'tokenStatus' => $tokenStatus,
-            'cloudflaredStatus' => ['running' => false, 'message' => 'Checked only when needed']
+            'tunnelStatus' => $this->cloudflaredService->getStatus()
         ]);
     }
 

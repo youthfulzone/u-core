@@ -67,6 +67,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/', [\App\Http\Controllers\EfacturaController::class, 'index'])->name('index');
         Route::post('/authenticate', [\App\Http\Controllers\EfacturaController::class, 'authenticate'])->name('authenticate');
         Route::get('/status', [\App\Http\Controllers\EfacturaController::class, 'status'])->name('status');
+        Route::post('/tunnel-control', [\App\Http\Controllers\EfacturaController::class, 'tunnelControl'])->name('tunnel-control');
         Route::post('/revoke', [\App\Http\Controllers\EfacturaController::class, 'revoke'])->name('revoke');
         Route::post('/refresh-token', [\App\Http\Controllers\EfacturaController::class, 'refreshToken'])->name('refresh-token');
         Route::post('/mark-compromised', [\App\Http\Controllers\EfacturaController::class, 'markTokenCompromised'])->name('mark-compromised');

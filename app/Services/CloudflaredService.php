@@ -71,32 +71,60 @@ class CloudflaredService
     public function start(): bool
     {
         if ($this->isRunning()) {
+            Log::info('Cloudflared tunnel already running');
             return true;
         }
 
         try {
-            // Use dedicated tunnel.py script
+            // Clear cache for fresh start
+            self::$statusCache = null;
+            self::$cacheTime = 0;
+            
+            Log::info('Starting cloudflared tunnel...');
+            
+            // Use dedicated tunnel.py script (preferred method)
             $pythonScript = base_path('cloudflared/tunnel.py');
             if (file_exists($pythonScript)) {
-                $command = "cd /d \"{$this->workingDirectory}\" && start /B python tunnel.py start";
+                $command = "cd /d \"{$this->workingDirectory}\" && start /MIN python tunnel.py start >NUL 2>&1";
                 shell_exec($command);
                 
-                // Wait a moment and check if it started
-                sleep(3);
-                return $this->isRunning();
+                // Wait for startup and verify multiple times
+                for ($i = 0; $i < 10; $i++) {
+                    sleep(1);
+                    if ($this->checkProcess()) {
+                        Log::info('Cloudflared tunnel started successfully via Python script');
+                        return true;
+                    }
+                }
             }
 
-            // Fallback to direct cloudflared execution if tunnel.py doesn't exist
-            if (!file_exists($this->executablePath)) {
-                Log::error('Cloudflared executable not found', ['path' => $this->executablePath]);
-                return false;
+            // Fallback to direct cloudflared execution
+            if (file_exists($this->executablePath)) {
+                Log::info('Python script failed, trying direct cloudflared execution');
+                
+                // Read token from efactura.token file if it exists
+                $tokenFile = base_path('cloudflared/efactura.token');
+                if (file_exists($tokenFile)) {
+                    $token = trim(file_get_contents($tokenFile));
+                    $command = "cd /d \"{$this->workingDirectory}\" && start /MIN cloudflared.exe tunnel run --url http://127.0.0.1:80 --http-host-header u-core.test --token {$token} >NUL 2>&1";
+                } else {
+                    $command = "cd /d \"{$this->workingDirectory}\" && start /MIN cloudflared.exe tunnel run --url http://u-core.test efactura >NUL 2>&1";
+                }
+                
+                shell_exec($command);
+                
+                // Wait for startup and verify
+                for ($i = 0; $i < 10; $i++) {
+                    sleep(1);
+                    if ($this->checkProcess()) {
+                        Log::info('Cloudflared tunnel started successfully via direct execution');
+                        return true;
+                    }
+                }
             }
-
-            $command = "cd /d \"{$this->workingDirectory}\" && start /B cloudflared.exe tunnel run --url http://u-core.test efactura";
-            shell_exec($command);
             
-            sleep(3);
-            return $this->isRunning();
+            Log::error('Failed to start cloudflared tunnel - no valid method found');
+            return false;
 
         } catch (\Exception $e) {
             Log::error('Failed to start cloudflared tunnel', ['error' => $e->getMessage()]);
