@@ -21,7 +21,7 @@ class EfacturaInvoice extends Model
         'invoice_type',
         'supplier_name',
         'supplier_tax_id',
-        'customer_name', 
+        'customer_name',
         'customer_tax_id',
         'total_amount',
         'currency',
@@ -30,6 +30,7 @@ class EfacturaInvoice extends Model
         'xml_errors',
         'zip_content',
         'pdf_content',
+        'pdf_generated_at',
         'status',
         'upload_status',
         'download_status',
@@ -42,7 +43,8 @@ class EfacturaInvoice extends Model
         'archived_at',
         'file_size',
         'original_filename',
-        'checksum'
+        'checksum',
+        'sync_id'
     ];
 
     protected function casts(): array

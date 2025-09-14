@@ -68,12 +68,17 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('/authenticate', [\App\Http\Controllers\EfacturaController::class, 'authenticate'])->name('authenticate');
         Route::get('/status', [\App\Http\Controllers\EfacturaController::class, 'status'])->name('status');
         Route::post('/tunnel-control', [\App\Http\Controllers\EfacturaController::class, 'tunnelControl'])->name('tunnel-control');
+        Route::get('/tunnel-status', [\App\Http\Controllers\EfacturaController::class, 'getTunnelStatus'])->name('tunnel-status');
         Route::post('/revoke', [\App\Http\Controllers\EfacturaController::class, 'revoke'])->name('revoke');
         Route::post('/refresh-token', [\App\Http\Controllers\EfacturaController::class, 'refreshToken'])->name('refresh-token');
         Route::post('/mark-compromised', [\App\Http\Controllers\EfacturaController::class, 'markTokenCompromised'])->name('mark-compromised');
         Route::post('/sync-messages', [\App\Http\Controllers\EfacturaController::class, 'syncMessages'])->name('sync-messages');
         Route::post('/download-pdf', [\App\Http\Controllers\EfacturaController::class, 'downloadPDF'])->name('download-pdf');
         Route::post('/view-xml', [\App\Http\Controllers\EfacturaController::class, 'viewXML'])->name('view-xml');
+        Route::delete('/clear-database', [\App\Http\Controllers\EfacturaController::class, 'clearDatabase'])->name('clear-database');
+        Route::get('/sync-status', [\App\Http\Controllers\EfacturaController::class, 'getSyncStatus'])->name('sync-status');
+        Route::get('/recent-invoices', [\App\Http\Controllers\EfacturaController::class, 'getRecentInvoices'])->name('recent-invoices');
+        Route::post('/generate-pdf', [\App\Http\Controllers\EfacturaController::class, 'generatePDF'])->name('generate-pdf');
     });
 });
 

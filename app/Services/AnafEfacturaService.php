@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\EfacturaToken;
 use App\Models\AnafCredential;
+use App\Services\AnafRateLimiter;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Http\Client\RequestException;
@@ -13,12 +14,15 @@ class AnafEfacturaService
 {
     private string $baseUrl;
     private ?string $accessToken = null;
+    private AnafRateLimiter $rateLimiter;
 
     public function __construct(string $environment = 'production')
     {
-        $this->baseUrl = $environment === 'production' 
+        $this->baseUrl = $environment === 'production'
             ? 'https://api.anaf.ro/prod/FCTEL/rest'
             : 'https://api.anaf.ro/test/FCTEL/rest';
+
+        $this->rateLimiter = new AnafRateLimiter();
     }
 
     private function getAccessToken(): string
@@ -137,13 +141,96 @@ class AnafEfacturaService
     }
 
     /**
+     * Convert XML to PDF using ANAF API
+     */
+    public function convertXmlToPdf(string $xmlContent, string $standard = 'FACT1', bool $validate = true): ?string
+    {
+        try {
+            $endpoint = $validate
+                ? "/transformare/{$standard}"
+                : "/transformare/{$standard}/DA";
+
+            $response = Http::withToken($this->getAccessToken())
+                ->withHeaders(['Content-Type' => 'text/plain'])
+                ->timeout(30)
+                ->withBody($xmlContent, 'text/plain')
+                ->post($this->baseUrl . $endpoint);
+
+            if ($response->successful()) {
+                // Response should be PDF content
+                return $response->body();
+            }
+
+            Log::error('XML to PDF conversion failed', [
+                'status' => $response->status(),
+                'body' => substr($response->body(), 0, 500)
+            ]);
+
+            return null;
+        } catch (\Exception $e) {
+            Log::error('XML to PDF conversion error', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Validate XML against ANAF standards
+     */
+    public function validateXml(string $xmlContent, string $standard = 'FACT1'): array
+    {
+        try {
+            $response = Http::withToken($this->getAccessToken())
+                ->withHeaders(['Content-Type' => 'text/plain'])
+                ->timeout(30)
+                ->withBody($xmlContent, 'text/plain')
+                ->post($this->baseUrl . "/validare/{$standard}");
+
+            if ($response->successful()) {
+                return [
+                    'valid' => true,
+                    'message' => 'XML valid',
+                    'details' => $response->json()
+                ];
+            }
+
+            return [
+                'valid' => false,
+                'message' => 'XML validation failed',
+                'details' => $response->json() ?? $response->body()
+            ];
+        } catch (\Exception $e) {
+            Log::error('XML validation error', ['error' => $e->getMessage()]);
+            return [
+                'valid' => false,
+                'message' => 'Validation error: ' . $e->getMessage(),
+                'details' => null
+            ];
+        }
+    }
+
+    /**
      * Download a specific message/invoice and return all data for MongoDB storage
      */
     public function downloadMessage(string $downloadId, array $messageData = []): array
     {
+        // Check ANAF rate limits before making the call
+        if (!$this->rateLimiter->canMakeCall('descarcare', ['message_id' => $downloadId])) {
+            throw new \Exception("ANAF rate limit exceeded for downloading message {$downloadId}");
+        }
+
         try {
+            Log::info('ANAF API: Making descarcare call', [
+                'download_id' => $downloadId,
+                'rate_limit_stats' => $this->rateLimiter->getStats()
+            ]);
+
             $response = Http::withToken($this->getAccessToken())
+                ->timeout(30) // Add 30 second timeout to prevent hanging
+                ->connectTimeout(10) // 10 second connection timeout
                 ->get($this->baseUrl . '/descarcare', ['id' => $downloadId]);
+
+            // Record the API call for rate limiting
+            $this->rateLimiter->recordCall('descarcare', ['message_id' => $downloadId]);
 
             if ($response->failed()) {
                 throw new RequestException($response);
@@ -171,9 +258,11 @@ class AnafEfacturaService
                 'file_size' => strlen($zipContent)
             ];
         } catch (\Exception $e) {
-            Log::error('ANAF e-Factura download error', [
-                'downloadId' => $downloadId,
-                'error' => $e->getMessage()
+            Log::error('ANAF SERVICE: CRITICAL ERROR during download', [
+                'download_id' => $downloadId,
+                'error' => $e->getMessage(),
+                'error_class' => get_class($e),
+                'trace' => $e->getTraceAsString()
             ]);
             throw $e;
         }
@@ -184,6 +273,7 @@ class AnafEfacturaService
      */
     private function extractZipContents(string $zipContent): array
     {
+        Log::info('ANAF SERVICE: Creating temporary ZIP file');
         $tempZipFile = tempnam(sys_get_temp_dir(), 'anaf_invoice_');
         file_put_contents($tempZipFile, $zipContent);
 
@@ -194,30 +284,53 @@ class AnafEfacturaService
             'errors' => null
         ];
 
+        Log::info('ANAF SERVICE: Opening ZIP file', [
+            'temp_file' => $tempZipFile,
+            'zip_size' => strlen($zipContent)
+        ]);
+
         if ($zip->open($tempZipFile) === TRUE) {
+            Log::info('ANAF SERVICE: ZIP opened successfully', [
+                'num_files' => $zip->numFiles
+            ]);
             for ($i = 0; $i < $zip->numFiles; $i++) {
                 $filename = $zip->getNameIndex($i);
                 $content = $zip->getFromIndex($i);
 
+                Log::info('ANAF SERVICE: Processing ZIP file', [
+                    'filename' => $filename,
+                    'content_length' => strlen($content),
+                    'is_xml' => str_ends_with($filename, '.xml')
+                ]);
+
                 if (str_ends_with($filename, '.xml')) {
                     // Identify file type based on content
-                    if (str_contains($content, 'ds:Signature') || 
-                        str_contains($filename, 'semnatura') || 
+                    if (str_contains($content, 'ds:Signature') ||
+                        str_contains($filename, 'semnatura') ||
                         str_contains($filename, 'signature')) {
                         $result['signature'] = $content;
-                    } elseif (str_contains($content, 'ErrorList') || 
-                              str_contains($filename, 'erori') || 
+                        Log::info('ANAF SERVICE: Identified signature file', ['filename' => $filename]);
+                    } elseif (str_contains($content, 'ErrorList') ||
+                              str_contains($filename, 'erori') ||
                               str_contains($filename, 'errors')) {
                         $result['errors'] = $content;
+                        Log::info('ANAF SERVICE: Identified errors file', ['filename' => $filename]);
                     } else {
                         $result['invoice'] = $content;
+                        Log::info('ANAF SERVICE: Identified invoice file', ['filename' => $filename]);
                     }
                 }
             }
             $zip->close();
+            Log::info('ANAF SERVICE: ZIP processing completed');
+        } else {
+            Log::error('ANAF SERVICE: Failed to open ZIP file');
         }
 
         unlink($tempZipFile);
+        Log::info('ANAF SERVICE: Cleanup completed', [
+            'extracted_types' => array_keys(array_filter($result))
+        ]);
         return $result;
     }
 
@@ -304,34 +417,54 @@ class AnafEfacturaService
     private function parseUBLInvoice(\SimpleXMLElement $xml): array
     {
         $ns = $xml->getNamespaces(true);
-        
+
         // Get basic invoice info
         $idNodes = $xml->xpath('//cbc:ID');
         $invoiceNumber = !empty($idNodes) ? (string) $idNodes[0] : 'Unknown';
-        
+
         $dateNodes = $xml->xpath('//cbc:IssueDate');
         $issueDate = !empty($dateNodes) ? (string) $dateNodes[0] : null;
-        
-        // Get supplier info
-        $supplierNameNodes = $xml->xpath('//cac:AccountingSupplierParty//cbc:Name');
-        $supplierName = !empty($supplierNameNodes) ? (string) $supplierNameNodes[0] : 'Unknown';
-        
-        $supplierTaxNodes = $xml->xpath('//cac:AccountingSupplierParty//cbc:CompanyID');
-        $supplierTaxId = !empty($supplierTaxNodes) ? (string) $supplierTaxNodes[0] : '';
-        
-        // Get customer info
-        $customerNameNodes = $xml->xpath('//cac:AccountingCustomerParty//cbc:Name');
-        $customerName = !empty($customerNameNodes) ? (string) $customerNameNodes[0] : 'Unknown';
-        
-        $customerTaxNodes = $xml->xpath('//cac:AccountingCustomerParty//cbc:CompanyID');
-        $customerTaxId = !empty($customerTaxNodes) ? (string) $customerTaxNodes[0] : '';
-        
-        // Get totals
-        $totalNodes = $xml->xpath('//cac:LegalMonetaryTotal//cbc:PayableAmount');
-        $totalAmount = !empty($totalNodes) ? (float) $totalNodes[0] : 0;
-        
-        $currencyNodes = $xml->xpath('//cac:LegalMonetaryTotal//cbc:PayableAmount/@currencyID');
-        $currency = !empty($currencyNodes) ? (string) $currencyNodes[0] : 'RON';
+
+        // Get supplier info - try multiple patterns for better accuracy
+        $supplierName = $this->extractSupplierName($xml);
+        $supplierTaxId = $this->extractSupplierTaxId($xml);
+
+        // Get customer info - try multiple patterns for better accuracy
+        $customerName = $this->extractCustomerName($xml);
+        $customerTaxId = $this->extractCustomerTaxId($xml);
+
+        // Get totals - try multiple patterns for better accuracy
+        $totalAmount = 0;
+        $currency = 'RON';
+
+        // Try different total amount patterns
+        $totalPatterns = [
+            '//cac:LegalMonetaryTotal//cbc:PayableAmount',
+            '//cac:LegalMonetaryTotal//cbc:TaxInclusiveAmount',
+            '//cac:LegalMonetaryTotal//cbc:LineExtensionAmount',
+            '//cac:AnticipatedMonetaryTotal//cbc:PayableAmount',
+            '//cbc:PayableAmount',
+            '//cbc:TaxInclusiveAmount'
+        ];
+
+        foreach ($totalPatterns as $pattern) {
+            $nodes = $xml->xpath($pattern);
+            if (!empty($nodes)) {
+                $value = (string) $nodes[0];
+                // Remove any non-numeric characters except decimal point
+                $value = preg_replace('/[^0-9.]/', '', $value);
+                if (is_numeric($value) && $value > 0) {
+                    $totalAmount = (float) $value;
+
+                    // Try to get currency from the same node
+                    $currencyNodes = $xml->xpath($pattern . '/@currencyID');
+                    if (!empty($currencyNodes)) {
+                        $currency = (string) $currencyNodes[0];
+                    }
+                    break;
+                }
+            }
+        }
         
         return [
             'invoice_number' => $invoiceNumber,
@@ -348,15 +481,70 @@ class AnafEfacturaService
 
     private function parseCIIInvoice(\SimpleXMLElement $xml): array
     {
-        // Implement CII parsing
+        // CII (Cross Industry Invoice) parsing
+        $ns = $xml->getNamespaces(true);
+
+        // Get basic invoice info
+        $invoiceNumber = 'Unknown';
+        $idNodes = $xml->xpath('//rsm:ExchangedDocument//ram:ID');
+        if (!empty($idNodes)) {
+            $invoiceNumber = (string) $idNodes[0];
+        }
+
+        $issueDate = null;
+        $dateNodes = $xml->xpath('//rsm:ExchangedDocument//ram:IssueDateTime//udt:DateTimeString');
+        if (!empty($dateNodes)) {
+            $issueDate = (string) $dateNodes[0];
+        }
+
+        // Get supplier and customer info using the existing extraction methods
+        $supplierName = $this->extractSupplierName($xml);
+        $supplierTaxId = $this->extractSupplierTaxId($xml);
+        $customerName = $this->extractCustomerName($xml);
+        $customerTaxId = $this->extractCustomerTaxId($xml);
+
+        // Get totals - try multiple patterns for better accuracy
+        $totalAmount = 0;
+        $currency = 'RON';
+
+        // Try different total amount patterns for CII format
+        $totalPatterns = [
+            '//ram:SpecifiedTradeSettlementHeaderMonetarySummation//ram:GrandTotalAmount',
+            '//ram:SpecifiedTradeSettlementHeaderMonetarySummation//ram:DuePayableAmount',
+            '//ram:SpecifiedTradeSettlementHeaderMonetarySummation//ram:TaxBasisTotalAmount',
+            '//ram:GrandTotalAmount',
+            '//ram:DuePayableAmount'
+        ];
+
+        foreach ($totalPatterns as $pattern) {
+            $nodes = $xml->xpath($pattern);
+            if (!empty($nodes)) {
+                $value = (string) $nodes[0];
+                // Remove any non-numeric characters except decimal point
+                $value = preg_replace('/[^0-9.]/', '', $value);
+                if (is_numeric($value) && $value > 0) {
+                    $totalAmount = (float) $value;
+
+                    // Try to get currency from the same node
+                    $currencyNodes = $xml->xpath($pattern . '/@currencyID');
+                    if (!empty($currencyNodes)) {
+                        $currency = (string) $currencyNodes[0];
+                    }
+                    break;
+                }
+            }
+        }
+        
         return [
-            'invoice_number' => 'CII Format',
-            'issue_date' => null,
-            'supplier_name' => 'Unknown',
-            'customer_name' => 'Unknown',
-            'total_amount' => 0,
-            'currency' => 'RON',
-            'status' => 'cii_format'
+            'invoice_number' => $invoiceNumber,
+            'issue_date' => $issueDate ? Carbon::parse($issueDate) : null,
+            'supplier_name' => $supplierName,
+            'supplier_tax_id' => $supplierTaxId,
+            'customer_name' => $customerName,
+            'customer_tax_id' => $customerTaxId,
+            'total_amount' => $totalAmount,
+            'currency' => $currency,
+            'status' => 'parsed'
         ];
     }
 
@@ -375,5 +563,93 @@ class AnafEfacturaService
             'currency' => 'RON',
             'status' => 'generic_format'
         ];
+    }
+    
+    /**
+     * Extract supplier name from UBL XML using multiple patterns
+     */
+    private function extractSupplierName(\SimpleXMLElement $xml): string
+    {
+        $patterns = [
+            '//cac:AccountingSupplierParty//cac:Party//cac:PartyName//cbc:Name',
+            '//cac:AccountingSupplierParty//cac:Party//cac:PartyLegalEntity//cbc:RegistrationName',
+            '//cac:AccountingSupplierParty//cbc:Name',
+            '//ram:SellerTradeParty//ram:Name' // CII format
+        ];
+        
+        foreach ($patterns as $pattern) {
+            $nodes = $xml->xpath($pattern);
+            if (!empty($nodes) && !empty(trim((string) $nodes[0]))) {
+                return trim((string) $nodes[0]);
+            }
+        }
+        
+        return 'Unknown';
+    }
+    
+    /**
+     * Extract supplier tax ID from UBL XML using multiple patterns
+     */
+    private function extractSupplierTaxId(\SimpleXMLElement $xml): string
+    {
+        $patterns = [
+            '//cac:AccountingSupplierParty//cac:Party//cac:PartyTaxScheme//cbc:CompanyID',
+            '//cac:AccountingSupplierParty//cac:Party//cac:PartyLegalEntity//cbc:CompanyID',
+            '//cac:AccountingSupplierParty//cbc:CompanyID',
+            '//ram:SellerTradeParty//ram:SpecifiedTaxRegistration//ram:ID' // CII format
+        ];
+        
+        foreach ($patterns as $pattern) {
+            $nodes = $xml->xpath($pattern);
+            if (!empty($nodes) && !empty(trim((string) $nodes[0]))) {
+                return trim((string) $nodes[0]);
+            }
+        }
+        
+        return '';
+    }
+    
+    /**
+     * Extract customer name from UBL XML using multiple patterns
+     */
+    private function extractCustomerName(\SimpleXMLElement $xml): string
+    {
+        $patterns = [
+            '//cac:AccountingCustomerParty//cac:Party//cac:PartyName//cbc:Name',
+            '//cac:AccountingCustomerParty//cac:Party//cac:PartyLegalEntity//cbc:RegistrationName', 
+            '//cac:AccountingCustomerParty//cbc:Name',
+            '//ram:BuyerTradeParty//ram:Name' // CII format
+        ];
+        
+        foreach ($patterns as $pattern) {
+            $nodes = $xml->xpath($pattern);
+            if (!empty($nodes) && !empty(trim((string) $nodes[0]))) {
+                return trim((string) $nodes[0]);
+            }
+        }
+        
+        return 'Unknown';
+    }
+    
+    /**
+     * Extract customer tax ID from UBL XML using multiple patterns
+     */
+    private function extractCustomerTaxId(\SimpleXMLElement $xml): string
+    {
+        $patterns = [
+            '//cac:AccountingCustomerParty//cac:Party//cac:PartyTaxScheme//cbc:CompanyID',
+            '//cac:AccountingCustomerParty//cac:Party//cac:PartyLegalEntity//cbc:CompanyID',
+            '//cac:AccountingCustomerParty//cbc:CompanyID',
+            '//ram:BuyerTradeParty//ram:SpecifiedTaxRegistration//ram:ID' // CII format
+        ];
+        
+        foreach ($patterns as $pattern) {
+            $nodes = $xml->xpath($pattern);
+            if (!empty($nodes) && !empty(trim((string) $nodes[0]))) {
+                return trim((string) $nodes[0]);
+            }
+        }
+        
+        return '';
     }
 }
