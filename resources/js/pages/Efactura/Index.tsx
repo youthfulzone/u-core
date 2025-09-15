@@ -208,30 +208,28 @@ export default function Index({
             const data = await response.json();
 
             if (data.success) {
-                // Start polling for this sync operation
-                const pollInterval = setInterval(async () => {
-                    try {
-                        const statusResponse = await fetch('/efactura/sync-status');
-                        const statusData = await statusResponse.json();
+                console.log('🚀 Sync request successful:', {
+                    job_dispatched: data.job_dispatched,
+                    sync_id: data.sync_id || 'No sync_id returned'
+                });
 
-                        setSyncStatus(statusData);
+                // Set syncing immediately for UI feedback
+                setSyncing(true);
 
-                        // Stop polling when complete
-                        if (!statusData.is_syncing && (statusData.status === 'completed' || statusData.status === 'failed' || statusData.status === 'idle')) {
-                            clearInterval(pollInterval);
-                            setSyncing(false);
-
-                            // Clear status after showing completion for 30 seconds
-                            setTimeout(() => {
-                                setSyncStatus(null);
-                            }, 30000);
-                        }
-                    } catch (error) {
-                        console.error('Failed to poll sync status:', error);
-                    }
-                }, 2000); // Poll every 2 seconds
                 if (data.job_dispatched) {
                     addNotification('info', data.message || 'Sincronizare pornită în background');
+
+                    // Force immediate status check after brief delay
+                    setTimeout(async () => {
+                        try {
+                            const checkResponse = await fetch('/efactura/sync-status');
+                            const checkData = await checkResponse.json();
+                            console.log('🔍 Immediate status check:', checkData);
+                            setSyncStatus(checkData);
+                        } catch (error) {
+                            console.error('Failed immediate status check:', error);
+                        }
+                    }, 1000);
                 } else {
                     addNotification('success', 'Sincronizare finalizată cu succes');
                     setTimeout(() => window.location.reload(), 2000);
@@ -242,8 +240,6 @@ export default function Index({
         } catch (error) {
             console.error('Failed to sync messages:', error);
             addNotification('error', 'Eroare la sincronizare');
-        } finally {
-            setSyncing(false);
         }
     };
 
@@ -476,165 +472,151 @@ export default function Index({
         }
     };
 
+    // Move fetchRecentInvoices to component level for accessibility
+    const fetchRecentInvoices = async (since?: string) => {
+        try {
+            const params = new URLSearchParams();
+            if (since) {
+                params.append('since', since);
+            }
+            params.append('limit', '50');
+
+            // Fetch recent invoices
+
+            const response = await fetch(`/efactura/recent-invoices?${params}`);
+            const data = await response.json();
+
+            // Process response
+
+            if (data.invoices && data.invoices.length > 0) {
+                setInvoices(prev => {
+                    if (since) {
+                        // Merge new invoices with existing ones
+                        const existingIds = new Set(prev.map(inv => inv._id));
+                        const newInvoices = data.invoices.filter((inv: Invoice) => !existingIds.has(inv._id));
+
+                        if (newInvoices.length > 0) {
+                            console.log(`✅ Added ${newInvoices.length} new invoices`);
+                            // Add new invoices at the beginning, limit total to 200
+                            return [...newInvoices, ...prev].slice(0, 200);
+                        }
+                        return prev;
+                    } else {
+                        // Full refresh - replace entire list
+                        console.log(`🔄 Loaded ${data.invoices.length} invoices`);
+                        return data.invoices;
+                    }
+                });
+            }
+        } catch (error) {
+            console.error('Failed to fetch recent invoices:', error);
+        }
+    };
+
     // Update sync status with smart polling to prevent UI spam
     useEffect(() => {
-        let interval: NodeJS.Timeout;
-        let lastProcessedInvoices = 0;
-        let lastCui = '';
-        let sameStatusCount = 0;
-        let lastInvoiceCheck = new Date().toISOString();
+        let intervalRef: NodeJS.Timeout | null = null;
+        let lastFetchTime = 0;
+        let lastTotalProcessed = 0;
+        let isActive = true;
+        const FETCH_COOLDOWN = 2000; // Minimum 2 seconds between fetches
 
         const updateSyncStatus = async () => {
+            if (!isActive) return;
+
             try {
                 const response = await fetch('/efactura/sync-status');
                 const statusData = await response.json();
 
-                // Check if status actually changed
-                const currentProcessed = statusData.total_processed || 0;
-                const currentCui = statusData.cui || '';
+                // Simple logging
+                if (statusData.is_syncing) {
+                    console.log(`📊 Downloading: ${statusData.company_name || 'Company'} (${statusData.current_company}/${statusData.total_companies}) - ${statusData.total_processed || 0} invoices processed`);
+                    setSyncing(true);
+                }
 
-                // Only update UI if there's actual progress or CUI changed
-                if (currentProcessed !== lastProcessedInvoices ||
-                    currentCui !== lastCui ||
-                    statusData.status === 'completed' ||
-                    statusData.status === 'failed' ||
-                    !statusData.is_syncing) {
+                // Show errors
+                if (statusData.last_error) {
+                    console.error('❌ Error:', statusData.last_error);
+                }
 
-                    setSyncStatus(statusData);
+                // Update UI
+                setSyncStatus(statusData);
 
-                    // Always fetch recent invoices when sync status changes during active sync
-                    if (statusData.is_syncing) {
-                        console.log('Fetching recent invoices due to sync progress:', {
-                            currentProcessed,
-                            lastProcessedInvoices,
-                            currentCui,
-                            lastCui,
-                            current_company: statusData.current_company,
-                            current_invoice: statusData.current_invoice
-                        });
-                        fetchRecentInvoices(lastInvoiceCheck);
-                        lastInvoiceCheck = new Date().toISOString();
+                // Check if we should fetch new invoices
+                if (statusData.is_syncing && statusData.total_processed > 0) {
+                    const now = Date.now();
+                    const timeSinceLastFetch = now - lastFetchTime;
+                    const processedDiff = statusData.total_processed - lastTotalProcessed;
+
+                    // Fetch if we've processed new invoices and cooldown has passed
+                    if (processedDiff > 0 && timeSinceLastFetch >= FETCH_COOLDOWN) {
+                        console.log(`📥 Fetching invoices - ${processedDiff} new processed`);
+                        fetchRecentInvoices(new Date(lastFetchTime || now - 30000).toISOString());
+                        lastFetchTime = now;
+                        lastTotalProcessed = statusData.total_processed;
                     }
+                }
 
-                    lastProcessedInvoices = currentProcessed;
-                    lastCui = currentCui;
-                    sameStatusCount = 0;
+                // Handle sync completion
+                if (!statusData.is_syncing || statusData.status === 'completed' || statusData.status === 'failed') {
+                    console.log('🏁 Sync finished');
 
-                    // Clear completed status after 10 seconds
+                    // Reset syncing state
+                    setSyncing(false);
+
+                    // Final invoice fetch on completion - multiple attempts to ensure we get everything
                     if (statusData.status === 'completed') {
-                        // Fetch all new invoices when sync completes
+                        console.log('📥 Sync completed - fetching final invoices...');
+
+                        // Immediate fetch
                         fetchRecentInvoices();
 
+                        // Second fetch after 1 second to catch any stragglers
                         setTimeout(() => {
+                            if (isActive) {
+                                console.log('📥 Final fetch attempt...');
+                                fetchRecentInvoices();
+                            }
+                        }, 1000);
+                    }
+
+                    // Stop polling after final fetches
+                    setTimeout(() => {
+                        if (intervalRef) {
+                            clearInterval(intervalRef);
+                            intervalRef = null;
+                        }
+                    }, 3000);
+
+                    // Clear status after 10 seconds
+                    setTimeout(() => {
+                        if (isActive) {
                             setSyncStatus(prev => {
-                                if (prev?.status === 'completed') {
+                                if (prev?.status === 'completed' || prev?.status === 'failed') {
                                     return null;
                                 }
                                 return prev;
                             });
-                        }, 10000);
-                    }
-                } else {
-                    // Same status, increment counter
-                    sameStatusCount++;
-
-                    // Only update timestamp every 5th check to reduce UI updates
-                    if (sameStatusCount % 5 === 0) {
-                        setSyncStatus(prev => prev ? {
-                            ...prev,
-                            last_update: new Date().toISOString()
-                        } : null);
-                    }
+                        }
+                    }, 10000);
                 }
             } catch (error) {
                 console.error('Failed to update sync status:', error);
             }
         };
 
-        const fetchRecentInvoices = async (since?: string) => {
-            try {
-                const params = new URLSearchParams();
-                if (since) {
-                    params.append('since', since);
-                }
-                params.append('limit', '50');
-
-                console.log('Fetching recent invoices with params:', { since, limit: 50 });
-
-                const response = await fetch(`/efactura/recent-invoices?${params}`);
-                const data = await response.json();
-
-                console.log('Recent invoices response:', {
-                    success: data.success,
-                    count: data.invoices?.length || 0,
-                    invoices: data.invoices?.slice(0, 3).map((inv: Invoice) => ({
-                        id: inv._id,
-                        number: inv.invoice_number,
-                        created_at: inv.created_at
-                    })) || []
-                });
-
-                if (data.success && data.invoices && data.invoices.length > 0) {
-                    if (since) {
-                        // Merge new invoices with existing ones
-                        setInvoices(prev => {
-                            const existingIds = new Set(prev.map(inv => inv._id));
-                            const newInvoices = data.invoices.filter((inv: Invoice) => !existingIds.has(inv._id));
-                            console.log('Adding new invoices to table:', newInvoices.length);
-                            return [...newInvoices, ...prev].slice(0, 100); // Keep max 100 invoices
-                        });
-                    } else {
-                        // Replace all invoices
-                        console.log('Replacing all invoices with:', data.invoices.length, 'invoices');
-                        setInvoices(data.invoices);
-                    }
-                } else {
-                    console.log('No new invoices found');
-                }
-            } catch (error) {
-                console.error('Failed to fetch recent invoices:', error);
-            }
-        };
-
-        // Initial check
-        updateSyncStatus();
-
-        // Only poll if there's an active sync operation
-        // Check once initially to see if a sync is in progress
-        const checkAndStartPolling = async () => {
-            try {
-                const response = await fetch('/efactura/sync-status');
-                const data = await response.json();
-
-                // Only start polling if there's an active sync
-                if (data.is_syncing || data.status === 'processing' || data.status === 'starting') {
-                    interval = setInterval(async () => {
-                        const statusResponse = await fetch('/efactura/sync-status');
-                        const statusData = await statusResponse.json();
-
-                        // Update sync status
-                        setSyncStatus(statusData);
-
-                        // Stop polling when sync is complete or failed
-                        if (!statusData.is_syncing && (statusData.status === 'completed' || statusData.status === 'failed' || statusData.status === 'idle')) {
-                            if (interval) {
-                                clearInterval(interval);
-                                interval = null;
-                            }
-                        }
-                    }, 2000);
-                }
-            } catch (error) {
-                console.error('Failed to check sync status:', error);
-            }
-        };
-
-        checkAndStartPolling();
+        // Always start monitoring - don't depend on syncing state
+        console.log('📡 Starting continuous sync monitoring');
+        updateSyncStatus(); // Initial call
+        intervalRef = setInterval(updateSyncStatus, 1000); // Poll every second
 
         return () => {
-            if (interval) clearInterval(interval);
+            isActive = false;
+            if (intervalRef) {
+                clearInterval(intervalRef);
+            }
         };
-    }, []); // Empty dependency array to run once
+    }, []); // Run once on mount
 
     // Auto-sync every 10 seconds for testing
     useEffect(() => {
@@ -875,16 +857,26 @@ export default function Index({
                                             )}
                                         </div>
                                         <div className="flex items-center gap-3">
-                                            {syncStatus?.total_invoices > 0 && (
+                                            {/* Progress indicator based on total_processed */}
+                                            {syncStatus?.total_processed > 0 && (
+                                                <div className="flex items-center gap-2">
+                                                    <div className="text-xs text-green-600 font-medium">
+                                                        {syncStatus.total_processed} processed
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* Company progress indicator */}
+                                            {syncStatus?.current_company > 0 && syncStatus?.total_companies > 0 && (
                                                 <div className="flex items-center gap-2">
                                                     <div className="w-24 bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
                                                         <div
                                                             className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
-                                                            style={{ width: `${Math.round((syncStatus.processed_invoices / syncStatus.total_invoices) * 100)}%` }}
+                                                            style={{ width: `${Math.round((syncStatus.current_company / syncStatus.total_companies) * 100)}%` }}
                                                         />
                                                     </div>
-                                                    <span className="font-medium">
-                                                        {Math.round((syncStatus.processed_invoices / syncStatus.total_invoices) * 100)}%
+                                                    <span className="font-medium text-xs">
+                                                        {Math.round((syncStatus.current_company / syncStatus.total_companies) * 100)}%
                                                     </span>
                                                 </div>
                                             )}
@@ -900,6 +892,20 @@ export default function Index({
                                                  autoSyncEnabled ? 'Auto-Sync 10s' : 'Inactiv'}
                                             </Badge>
                                         </div>
+                                    </div>
+                                )}
+
+                                {/* Simple Error Display */}
+                                {syncStatus?.last_error && (
+                                    <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
+                                        <span className="font-medium">Error:</span> {syncStatus.last_error}
+                                    </div>
+                                )}
+
+                                {/* Total Errors Counter */}
+                                {syncStatus?.total_errors > 0 && (
+                                    <div className="mt-1 text-xs text-orange-600">
+                                        {syncStatus.total_errors} error(s) encountered during sync
                                     </div>
                                 )}
                             </div>
@@ -928,7 +934,7 @@ export default function Index({
                             <div className="overflow-x-auto">
                                 <table className="w-full table-fixed">
                                     <thead className="border-b bg-muted/50">
-                                        <tr>
+                                        <tr key="header">
                                             <th className="text-left p-4 font-semibold text-sm w-[80px]">CUI</th>
                                             <th className="text-left p-4 font-semibold text-sm w-[100px]">Tip</th>
                                             <th className="text-left p-4 font-semibold text-sm w-[120px]">Nr. factură</th>
@@ -942,8 +948,8 @@ export default function Index({
                                     </thead>
                                     <tbody className="transition-opacity duration-200 ease-in-out opacity-100">
                                         {invoices.map((invoice, index) => (
-                                            <tr 
-                                                key={invoice._id} 
+                                            <tr
+                                                key={`invoice-${invoice._id}-${index}`}
                                                 className={`border-b hover:bg-muted/30 transition-colors duration-200 ease-in-out ${index % 2 === 0 ? 'bg-background' : 'bg-muted/10'}`}
                                             >
                                                 <td className="p-4 align-top w-[80px]">

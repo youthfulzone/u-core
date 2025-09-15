@@ -55,6 +55,11 @@ class AnafEfacturaService
         int $page = 1,
         ?string $filter = null
     ): array {
+        // Check ANAF rate limits before making the call
+        if (!$this->rateLimiter->canMakeCall('lista', ['cui' => $cif, 'paginated' => true])) {
+            throw new \Exception("ANAF rate limit exceeded for listing messages for CUI {$cif}");
+        }
+
         $params = [
             'startTime' => $startDate->timestamp * 1000, // Unix timestamp in milliseconds
             'endTime' => $endDate->timestamp * 1000,
@@ -67,8 +72,13 @@ class AnafEfacturaService
         }
 
         try {
+            $this->rateLimiter->waitForNextCall(); // Wait before making the call
+
             $response = Http::withToken($this->getAccessToken())
                 ->get($this->baseUrl . '/listaMesajePaginatieFactura', $params);
+
+            // Record the API call for rate limiting
+            $this->rateLimiter->recordCall('lista', ['cui' => $cif, 'paginated' => true]);
 
             if ($response->failed()) {
                 throw new RequestException($response);
@@ -223,6 +233,8 @@ class AnafEfacturaService
                 'download_id' => $downloadId,
                 'rate_limit_stats' => $this->rateLimiter->getStats()
             ]);
+
+            $this->rateLimiter->waitForNextCall(); // Wait before making the call
 
             $response = Http::withToken($this->getAccessToken())
                 ->timeout(30) // Add 30 second timeout to prevent hanging

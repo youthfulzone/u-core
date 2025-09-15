@@ -117,7 +117,7 @@ class AnafRateLimiter
     public function canCheckMessageStatus(string $messageId): bool
     {
         $key = 'anaf_stare_' . $messageId . '_' . now()->format('Y-m-d');
-        $currentChecks = Cache::get($key, 0);
+        $currentChecks = MongoCache::get($key, 0);
 
         if ($currentChecks >= self::STARE_LIMIT_PER_DAY_PER_MESSAGE) {
             Log::warning('ANAF stare rate limit reached for message', [
@@ -165,11 +165,11 @@ class AnafRateLimiter
     public function waitForNextCall(bool $testMode = false): void
     {
         if ($testMode) {
-            // Test mode: 10 seconds between calls
-            sleep(10);
+            // Test mode: 1 second between calls
+            sleep(1);
         } else {
-            // Production: 4 seconds to stay well under 16.7 calls/second limit
-            sleep(4);
+            // Production: 500ms - very conservative rate to avoid hitting limits
+            usleep(500000); // 500ms = 0.5 seconds (120 calls/minute, well under 1000/minute)
         }
     }
 

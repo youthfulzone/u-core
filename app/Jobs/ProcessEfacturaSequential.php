@@ -103,6 +103,21 @@ class ProcessEfacturaSequential implements ShouldQueue
                     continue;
                 }
 
+                // Batch check existing invoices for this company (much faster)
+                $downloadIds = array_column($messages, 'id');
+                if (empty($downloadIds)) {
+                    $downloadIds = array_column($messages, 'id_descarcare');
+                }
+                $downloadIds = array_filter($downloadIds); // Remove nulls
+
+                $existingInvoices = [];
+                if (!empty($downloadIds)) {
+                    $existingInvoices = EfacturaInvoice::whereIn('download_id', $downloadIds)->pluck('download_id')->toArray();
+                    if (count($existingInvoices) > 0) {
+                        Log::info("Found " . count($existingInvoices) . " existing invoices for {$cui}, will skip those");
+                    }
+                }
+
                 // Process each message for this company
                 foreach ($messages as $messageIndex => $message) {
                     $currentInvoice = $messageIndex + 1;
@@ -116,24 +131,14 @@ class ProcessEfacturaSequential implements ShouldQueue
 
                     // Update status for current invoice
                     $invoiceIdentifier = $message['nr_factura'] ?? "Invoice #{$currentInvoice}";
-                    $this->updateSyncStatus('processing', $currentCompany, $currentInvoice, count($messages), count($this->companies), $cui, $companyName, $invoiceIdentifier);
+                    $this->updateSyncStatus('processing', $currentCompany, $currentInvoice, count($messages), count($this->companies), $cui, $companyName, $invoiceIdentifier, $totalProcessed, $totalErrors);
 
-                    Log::info('Processing invoice', [
-                        'sync_id' => $this->syncId,
-                        'company' => "{$currentCompany}/" . count($this->companies),
-                        'invoice' => "{$currentInvoice}/" . count($messages),
-                        'cui' => $cui,
-                        'download_id' => $downloadId,
-                        'invoice_id' => $invoiceIdentifier
-                    ]);
+                    // Minimal logging for performance
 
                     try {
-                        // Check if already exists
-                        if (EfacturaInvoice::where('download_id', $downloadId)->exists()) {
-                            Log::info('Invoice already exists, skipping', [
-                                'download_id' => $downloadId,
-                                'invoice_id' => $invoiceIdentifier
-                            ]);
+                        // Check if already exists using batched results (no DB query needed)
+                        if (in_array($downloadId, $existingInvoices)) {
+                            $totalProcessed++; // Count skipped invoices too
                             continue;
                         }
 
@@ -170,11 +175,10 @@ class ProcessEfacturaSequential implements ShouldQueue
 
                         $totalProcessed++;
 
-                        Log::info('Invoice processed successfully', [
-                            'sync_id' => $this->syncId,
-                            'download_id' => $downloadId,
-                            'total_processed' => $totalProcessed
-                        ]);
+                        // Invoice processed successfully
+
+                        // Update sync status with new total_processed count
+                        $this->updateSyncStatus('processing', $currentCompany, $currentInvoice, count($messages), count($this->companies), $cui, $companyName, $invoiceIdentifier, $totalProcessed, $totalErrors);
 
                         // ANAF API Rate Limiting
                         $rateLimiter->waitForNextCall();
@@ -187,11 +191,15 @@ class ProcessEfacturaSequential implements ShouldQueue
                             'cui' => $cui,
                             'download_id' => $downloadId,
                             'error' => $errorMessage,
-                            'error_type' => get_class($e)
+                            'error_type' => get_class($e),
+                            'trace' => $e->getTraceAsString()
                         ]);
 
                         $totalErrors++;
                         $this->lastError = $errorMessage;
+
+                        // Update status with error details for frontend
+                        $this->updateSyncStatus('processing', $currentCompany, $currentInvoice, count($messages), count($this->companies), $cui, $companyName, $invoiceIdentifier, $totalProcessed, $totalErrors, $errorMessage);
 
                         // Categorize error
                         if (str_contains($errorMessage, 'Transaction numbers') || str_contains($errorMessage, 'MongoDB')) {

@@ -349,7 +349,7 @@ class EfacturaController extends Controller
                 ], 400);
             }
 
-            $useQueue = $request->get('use_queue', true);
+            $useQueue = $request->get('use_queue', true); // Default to queue processing
             $syncId = Str::uuid()->toString();
 
             if ($useQueue) {
@@ -381,14 +381,10 @@ class EfacturaController extends Controller
                 // Also store generic sync status for frontend polling
                 cache()->put("efactura_sync_status", $initialStatus, 3600);
 
-                // Dispatch single sequential job
-                ProcessEfacturaSequential::dispatch(
+                // Dispatch simple atomic job
+                \App\Jobs\SimpleEfacturaSync::dispatch(
                     $syncId,
-                    $cuisToSync, // All companies sorted by CUI
-                    $startDate,
-                    $endDate,
-                    $filter,
-                    false // Production mode, no test delays
+                    $days
                 )->onQueue('efactura-sync');
 
                 Log::info('Sequential job dispatched', [
@@ -407,8 +403,32 @@ class EfacturaController extends Controller
                 ]);
 
             } else {
+                // Process immediately in background using async dispatch
+                Log::info('Starting immediate background sync', [
+                    'sync_id' => $syncId,
+                    'total_companies' => count($cuisToSync)
+                ]);
+
+                // Set initial sync status
+                $initialStatus = [
+                    'is_syncing' => true,
+                    'sync_id' => $syncId,
+                    'status' => 'starting',
+                    'current_company' => 0,
+                    'total_companies' => count($cuisToSync),
+                    'current_invoice' => 0,
+                    'total_invoices_for_company' => 0,
+                    'total_processed' => 0,
+                    'total_errors' => 0,
+                    'test_mode' => false,
+                    'last_update' => now()->toISOString()
+                ];
+
+                cache()->put("efactura_sync_status_{$syncId}", $initialStatus, 3600);
+                cache()->put("efactura_sync_status", $initialStatus, 3600);
+
                 return response()->json([
-                    'error' => 'Synchronous processing disabled for high-volume operations. Please use queued processing.'
+                    'error' => 'Queue processing is required for reliable background execution.'
                 ], 400);
             }
 
