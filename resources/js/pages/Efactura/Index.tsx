@@ -3,9 +3,10 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Head } from '@inertiajs/react';
 import { useState, useEffect } from 'react';
-import { CheckCircle, XCircle, RefreshCw, Play, Download, Eye, RotateCcw, FileText, Trash2, X, AlertCircle, Info, FileDown } from 'lucide-react';
+import { CheckCircle, XCircle, RefreshCw, Play, Download, Eye, RotateCcw, FileText, Trash2, X, AlertCircle, Info, FileDown, Settings } from 'lucide-react';
 import { type BreadcrumbItem } from '@/types';
 import { PlaceholderPattern } from '@/components/ui/placeholder-pattern';
+import AutoSyncSettings from '@/components/AutoSyncSettings';
 
 interface TokenStatus {
     has_token: boolean;
@@ -79,6 +80,7 @@ export default function Index({
     const [clearingDatabase, setClearingDatabase] = useState(false);
     const [syncStatus, setSyncStatus] = useState<any>(null);
     const [autoSyncEnabled, setAutoSyncEnabled] = useState(false);
+    const [showAutoSyncSettings, setShowAutoSyncSettings] = useState(false);
     const [notifications, setNotifications] = useState<Array<{id: string, type: 'success' | 'error' | 'info', message: string}>>([]);
 
     // Auto-update tunnel status every 10 seconds
@@ -729,6 +731,15 @@ export default function Index({
                                         )}
                                     </Button>
                                     <Button
+                                        onClick={() => setShowAutoSyncSettings(!showAutoSyncSettings)}
+                                        variant={showAutoSyncSettings ? "default" : "outline"}
+                                        size="sm"
+                                        className="gap-1"
+                                    >
+                                        <Settings className="h-3 w-3" />
+                                        Auto-Sync Settings
+                                    </Button>
+                                    <Button
                                         onClick={handleClearDatabase}
                                         disabled={clearingDatabase}
                                         variant="destructive"
@@ -914,8 +925,16 @@ export default function Index({
                         
                         </div>
                     </div>
-                
+
                     <div className="relative min-h-[100vh] flex-1 overflow-hidden rounded-xl border border-sidebar-border/70 md:min-h-min dark:border-sidebar-border">
+
+                    {/* Auto-Sync Settings Panel */}
+                    {showAutoSyncSettings && (
+                        <div className="p-6 border-b border-sidebar-border/70">
+                            <AutoSyncSettings />
+                        </div>
+                    )}
+
                     {/* Invoices table */}
                     <div className="p-6">
                         <div className="flex items-center justify-between mb-4">

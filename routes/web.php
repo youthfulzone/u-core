@@ -79,6 +79,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/sync-status', [\App\Http\Controllers\EfacturaController::class, 'getSyncStatus'])->name('sync-status');
         Route::get('/recent-invoices', [\App\Http\Controllers\EfacturaController::class, 'getRecentInvoices'])->name('recent-invoices');
         Route::post('/generate-pdf', [\App\Http\Controllers\EfacturaController::class, 'generatePDF'])->name('generate-pdf');
+
+        // Auto-sync routes
+        Route::get('/auto-sync/config', [\App\Http\Controllers\EfacturaController::class, 'getAutoSyncConfig'])->name('auto-sync.config');
+        Route::post('/auto-sync/config', [\App\Http\Controllers\EfacturaController::class, 'updateAutoSyncConfig'])->name('auto-sync.update-config');
+        Route::post('/auto-sync/trigger', [\App\Http\Controllers\EfacturaController::class, 'triggerAutoSync'])->name('auto-sync.trigger');
+        Route::get('/auto-sync/status', [\App\Http\Controllers\EfacturaController::class, 'getAutoSyncStatus'])->name('auto-sync.status');
     });
 });
 

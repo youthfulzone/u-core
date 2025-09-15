@@ -7,6 +7,7 @@ use App\Jobs\ProcessEfacturaSequential;
 use App\Models\AnafCredential;
 use App\Models\EfacturaToken;
 use App\Models\EfacturaInvoice;
+use App\Models\EfacturaAutoSync;
 use App\Services\AnafOAuthService;
 use App\Services\EfacturaApiService;
 use App\Services\AnafEfacturaService;
@@ -690,5 +691,150 @@ class EfacturaController extends Controller
             Log::error('Get recent invoices failed', ['error' => $e->getMessage()]);
             return response()->json(['error' => $e->getMessage()], 500);
         }
+    }
+
+    /**
+     * Get auto-sync configuration
+     */
+    public function getAutoSyncConfig()
+    {
+        $config = EfacturaAutoSync::getConfig();
+
+        return response()->json([
+            'enabled' => $config->enabled,
+            'schedule_time' => $config->schedule_time,
+            'sync_days' => $config->sync_days,
+            'timezone' => $config->timezone,
+            'last_run' => $config->last_run?->toISOString(),
+            'next_run' => $config->next_run?->toISOString(),
+            'status' => $config->status,
+            'last_error' => $config->last_error,
+            'consecutive_failures' => $config->consecutive_failures,
+            'email_reports' => $config->email_reports,
+            'email_recipients' => $config->email_recipients,
+            'last_report' => $config->last_report
+        ]);
+    }
+
+    /**
+     * Update auto-sync configuration
+     */
+    public function updateAutoSyncConfig(Request $request)
+    {
+        $request->validate([
+            'enabled' => 'required|boolean',
+            'schedule_time' => 'required|string|regex:/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/',
+            'sync_days' => 'required|integer|min:1|max:365',
+            'timezone' => 'required|string',
+            'email_reports' => 'boolean',
+            'email_recipients' => 'nullable|string'
+        ]);
+
+        $config = EfacturaAutoSync::getConfig();
+
+        $config->update([
+            'enabled' => $request->enabled,
+            'schedule_time' => $request->schedule_time,
+            'sync_days' => $request->sync_days,
+            'timezone' => $request->timezone,
+            'email_reports' => $request->email_reports ?? true,
+            'email_recipients' => $request->email_recipients
+        ]);
+
+        // Calculate and set next run time
+        if ($config->enabled) {
+            $config->updateNextRun();
+        } else {
+            $config->update(['next_run' => null]);
+        }
+
+        Log::info('Auto-sync configuration updated', [
+            'user_id' => auth()->id(),
+            'enabled' => $config->enabled,
+            'schedule_time' => $config->schedule_time,
+            'next_run' => $config->next_run?->toISOString()
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Auto-sync configuration updated successfully',
+            'config' => [
+                'enabled' => $config->enabled,
+                'schedule_time' => $config->schedule_time,
+                'sync_days' => $config->sync_days,
+                'timezone' => $config->timezone,
+                'next_run' => $config->next_run?->toISOString(),
+                'email_reports' => $config->email_reports,
+                'email_recipients' => $config->email_recipients
+            ]
+        ]);
+    }
+
+    /**
+     * Trigger auto-sync manually
+     */
+    public function triggerAutoSync()
+    {
+        $config = EfacturaAutoSync::getConfig();
+
+        if ($config->status === 'running') {
+            return response()->json([
+                'error' => 'Auto-sync is already running'
+            ], 400);
+        }
+
+        try {
+            // Mark as running
+            $config->markAsRunning();
+
+            // Generate sync ID
+            $syncId = 'manual-web-sync-' . now()->format('Y-m-d-H-i-s');
+
+            // Dispatch the sync job
+            \App\Jobs\SimpleEfacturaSync::dispatch($syncId, $config->sync_days)->onQueue('efactura-sync');
+
+            Log::info('Manual auto-sync triggered', [
+                'user_id' => auth()->id(),
+                'sync_id' => $syncId
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Auto-sync started successfully',
+                'sync_id' => $syncId
+            ]);
+
+        } catch (\Exception $e) {
+            $config->markAsFailed($e->getMessage());
+
+            Log::error('Manual auto-sync failed to start', [
+                'user_id' => auth()->id(),
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'error' => 'Failed to start auto-sync: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get auto-sync status
+     */
+    public function getAutoSyncStatus()
+    {
+        $config = EfacturaAutoSync::getConfig();
+
+        return response()->json([
+            'status' => $config->status,
+            'enabled' => $config->enabled,
+            'last_run' => $config->last_run?->toISOString(),
+            'next_run' => $config->next_run?->toISOString(),
+            'last_error' => $config->last_error,
+            'consecutive_failures' => $config->consecutive_failures,
+            'last_report' => $config->last_report,
+            'time_until_next_run' => $config->next_run ?
+                now()->diffInSeconds($config->next_run, false) : null
+        ]);
     }
 }
