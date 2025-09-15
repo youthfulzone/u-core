@@ -140,9 +140,28 @@ class SimpleEfacturaSync implements ShouldQueue
 
                         } catch (\Exception $e) {
                             $totalErrors++;
+                            $errorMessage = $e->getMessage();
+
+                            // Handle rate limits gracefully - don't fail the entire sync
+                            if (str_contains($errorMessage, 'rate limit exceeded')) {
+                                Log::warning('Rate limit encountered, skipping invoice and continuing', [
+                                    'download_id' => $downloadId,
+                                    'error' => $errorMessage,
+                                    'company' => $companyName,
+                                    'cui' => $cui
+                                ]);
+
+                                // Wait longer for rate limit errors and continue
+                                $rateLimiter->waitForNextCall();
+                                sleep(5); // Additional 5 second wait for rate limits
+                                continue;
+                            }
+
                             Log::error('Failed to process invoice', [
                                 'download_id' => $downloadId,
-                                'error' => $e->getMessage()
+                                'error' => $errorMessage,
+                                'company' => $companyName,
+                                'cui' => $cui
                             ]);
                         }
                     }
