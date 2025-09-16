@@ -3,11 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Jobs\ProcessEfacturaSync;
-use App\Jobs\ProcessEfacturaSequential;
+use App\Jobs\ProcessLiveEfacturaSync;
 use App\Models\AnafCredential;
+use App\Models\Company;
 use App\Models\EfacturaToken;
 use App\Models\EfacturaInvoice;
-use App\Models\EfacturaAutoSync;
 use App\Services\AnafOAuthService;
 use App\Services\EfacturaApiService;
 use App\Services\AnafEfacturaService;
@@ -17,6 +17,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Carbon\Carbon;
 
 class EfacturaController extends Controller
@@ -35,220 +37,365 @@ class EfacturaController extends Controller
             'user_id' => auth()->id(),
             'timestamp' => now()
         ]);
-
-        $activeCredential = AnafCredential::active()->first();
-        $activeToken = null;
-
-        if ($activeCredential) {
-            $activeToken = EfacturaToken::forClientId($activeCredential->client_id)
-                ->active()
-                ->first();
+        
+        $credential = AnafCredential::active()->first();
+        $token = $credential ? EfacturaToken::forClientId($credential->client_id)->active()->first() : null;
+        
+        // Build token status from existing token system
+        if ($token && $token->isValid()) {
+            $daysUntilExpiry = max(0, now()->diffInDays($token->expires_at, false));
+            $daysSinceIssued = $token->created_at->diffInDays(now());
+            $canRefresh = $daysSinceIssued >= 90; // 90-day constraint
+            
+            $status = 'active';
+            $message = "Token active, expires in {$daysUntilExpiry} days.";
+            
+            if ($daysUntilExpiry <= 7) {
+                $status = 'expiring_soon';
+                $message = "⚠️ Token expires in {$daysUntilExpiry} days!";
+            } elseif ($daysUntilExpiry <= 30) {
+                $status = 'expiring_warning';
+                $message = "Token expires in {$daysUntilExpiry} days.";
+            }
+            
+            $tokenStatus = [
+                'has_token' => true,
+                'status' => $status,
+                'token_id' => 'eft_' . substr(md5($token->id), 0, 8),
+                'issued_at' => $token->created_at->toISOString(),
+                'expires_at' => $token->expires_at->toISOString(),
+                'days_until_expiry' => $daysUntilExpiry,
+                'days_since_issued' => $daysSinceIssued,
+                'can_refresh' => $canRefresh,
+                'days_until_refresh' => $canRefresh ? 0 : (90 - $daysSinceIssued),
+                'usage_count' => 0, // Not tracked in old system
+                'last_used_at' => $token->updated_at->toISOString(),
+                'message' => $message,
+            ];
+        } else {
+            $tokenStatus = [
+                'has_token' => false,
+                'status' => 'no_token',
+                'message' => 'No active token available.'
+            ];
         }
-
-        $recentInvoices = EfacturaInvoice::orderBy('archived_at', 'desc')
-            ->limit(10)
-            ->get();
-
-        // Build token status object that matches frontend interface
-        $daysUntilExpiry = 0;
-        if ($activeToken && $activeToken->expires_at) {
-            $daysUntilExpiry = max(0, now()->diffInDays($activeToken->expires_at, false));
-        }
-
-        $tokenStatus = [
-            'has_token' => !!$activeToken,
-            'status' => $activeToken ? ($daysUntilExpiry < 7 ? 'expiring_soon' : 'active') : 'no_token',
-            'token_id' => $activeToken?->_id,
-            'issued_at' => $activeToken?->created_at?->toISOString(),
-            'expires_at' => $activeToken?->expires_at?->toISOString(),
-            'days_until_expiry' => $daysUntilExpiry,
-            'days_since_issued' => $activeToken ? now()->diffInDays($activeToken->created_at) : 0,
-            'can_refresh' => !!$activeToken,
-            'message' => $activeToken
-                ? ($daysUntilExpiry < 7
-                    ? "Token expires in {$daysUntilExpiry} days - consider refreshing"
-                    : "Token is active and valid ({$daysUntilExpiry} days remaining)")
-                : 'No active token found'
+        
+        // Build security dashboard from existing data
+        $allTokens = EfacturaToken::all();
+        $activeTokens = $allTokens->filter(fn($t) => $t->isValid());
+        $expiringTokens = $activeTokens->filter(fn($t) => now()->diffInDays($t->expires_at, false) <= 30);
+        
+        $securityDashboard = [
+            'active_tokens' => $activeTokens->values()->all(),
+            'expiring_tokens' => $expiringTokens->values()->all(),
+            'pending_revocations' => [], // Not available in old system
+            'total_tokens_issued' => $allTokens->count(),
+            'compromised_count' => 0, // Not tracked in old system
         ];
 
-        $tunnelStatus = $this->cloudflaredService->getStatus();
+        // Get recent invoices for display from all CUIs (optimized query)
+        $invoices = EfacturaInvoice::select([
+            '_id', 'cui', 'download_id', 'message_type', 'invoice_number', 
+            'invoice_date', 'supplier_name', 'customer_name', 'total_amount', 
+            'currency', 'status', 'download_status', 'created_at',
+            'pdf_content', 'xml_errors'
+        ])
+            ->orderBy('created_at', 'desc')
+            ->limit(50) // Reduced from 100 for faster loading
+            ->get()
+            ->map(function ($invoice) {
+                return [
+                    '_id' => $invoice->_id,
+                    'cui' => $invoice->cui, // Include CUI to identify which company
+                    'download_id' => $invoice->download_id,
+                    'message_type' => $invoice->message_type,
+                    'invoice_number' => $invoice->invoice_number,
+                    'invoice_date' => $invoice->invoice_date,
+                    'supplier_name' => $invoice->supplier_name,
+                    'customer_name' => $invoice->customer_name,
+                    'total_amount' => $invoice->total_amount,
+                    'currency' => $invoice->currency ?? 'RON',
+                    'status' => $invoice->status,
+                    'download_status' => $invoice->download_status,
+                    'created_at' => $invoice->created_at,
+                    'has_pdf' => !empty($invoice->pdf_content),
+                    'has_errors' => !empty($invoice->xml_errors)
+                ];
+            });
 
         return Inertia::render('Efactura/Index', [
-            'hasCredentials' => !!$activeCredential,
+            'hasCredentials' => (bool) $credential,
             'tokenStatus' => $tokenStatus,
-            'securityDashboard' => [
-                'active_tokens' => $activeToken ? [$activeToken] : [],
-                'expiring_tokens' => [],
-                'pending_revocations' => [],
-                'total_tokens_issued' => $activeToken ? 1 : 0,
-                'compromised_count' => 0
-            ],
-            'tunnelRunning' => $tunnelStatus['running'] ?? false,
-            'invoices' => $recentInvoices
+            'securityDashboard' => $securityDashboard,
+            'tunnelRunning' => false, // Don't check on every page load - too slow
+            'invoices' => $invoices
         ]);
-    }
-
-    public function authenticate(Request $request)
-    {
-        try {
-            $request->validate([
-                'client_id' => 'required|string',
-                'client_secret' => 'required|string',
-            ]);
-
-            // Start the authentication flow
-            $authUrl = $this->oauthService->getAuthorizationUrl(
-                $request->client_id,
-                $request->client_secret
-            );
-
-            return response()->json([
-                'success' => true,
-                'auth_url' => $authUrl,
-                'message' => 'Please authorize the application in the popup window.'
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('Authentication failed', ['error' => $e->getMessage()]);
-            return response()->json(['error' => $e->getMessage()], 400);
-        }
-    }
-
-    public function callback(Request $request)
-    {
-        Log::info('OAuth callback received', [
-            'query_params' => $request->query(),
-            'timestamp' => now()
-        ]);
-
-        try {
-            if ($request->has('error')) {
-                $errorDescription = $request->get('error_description', $request->get('error'));
-                Log::error('OAuth callback error', ['error' => $errorDescription]);
-
-                return view('oauth-callback-result', [
-                    'success' => false,
-                    'message' => "Authentication failed: {$errorDescription}"
-                ]);
-            }
-
-            if (!$request->has('code')) {
-                Log::error('OAuth callback missing authorization code');
-                return view('oauth-callback-result', [
-                    'success' => false,
-                    'message' => 'Authorization code not received'
-                ]);
-            }
-
-            // Exchange code for token
-            $result = $this->oauthService->exchangeCodeForToken($request->get('code'));
-
-            return view('oauth-callback-result', [
-                'success' => true,
-                'message' => 'Authentication successful! You can close this window.',
-                'token_info' => [
-                    'expires_at' => $result['expires_at'] ?? null,
-                    'scopes' => $result['scopes'] ?? []
-                ]
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('OAuth callback processing failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-
-            return view('oauth-callback-result', [
-                'success' => false,
-                'message' => "Authentication processing failed: {$e->getMessage()}"
-            ]);
-        }
-    }
-
-    public function status()
-    {
-        try {
-            $activeCredential = AnafCredential::active()->first();
-            $activeToken = null;
-
-            if ($activeCredential) {
-                $activeToken = EfacturaToken::forClientId($activeCredential->client_id)
-                    ->active()
-                    ->first();
-            }
-
-            return response()->json([
-                'hasActiveCredential' => !!$activeCredential,
-                'hasActiveToken' => !!$activeToken,
-                'tokenExpiresAt' => $activeToken?->expires_at,
-                'credentialInfo' => $activeCredential ? [
-                    'client_id' => $activeCredential->client_id,
-                    'created_at' => $activeCredential->created_at
-                ] : null
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('Status check failed', ['error' => $e->getMessage()]);
-            return response()->json(['error' => $e->getMessage()], 500);
-        }
     }
 
     public function getTunnelStatus()
     {
+        Log::info('Tunnel status requested', [
+            'user_id' => auth()->id(),
+            'timestamp' => now()
+        ]);
+        
         try {
-            return response()->json($this->cloudflaredService->getStatus());
+            return response()->json([
+                'success' => true,
+                'status' => $this->cloudflaredService->getStatus()
+            ]);
         } catch (\Exception $e) {
             Log::error('Tunnel status check failed', ['error' => $e->getMessage()]);
-            return response()->json(['error' => $e->getMessage()], 500);
+            return response()->json([
+                'success' => false,
+                'message' => 'Error: ' . $e->getMessage(),
+                'status' => ['running' => false, 'message' => 'Error checking status']
+            ], 500);
         }
     }
 
     public function tunnelControl(Request $request)
     {
+        $action = $request->get('action', 'status');
+        
+        Log::info('Tunnel control request received', [
+            'action' => $action,
+            'user_id' => auth()->id(),
+            'request_data' => $request->all(),
+            'timestamp' => now()
+        ]);
+        
         try {
-            $request->validate([
-                'action' => 'required|in:start,stop,restart'
-            ]);
-
-            $action = $request->get('action');
-
             switch ($action) {
                 case 'start':
-                    $result = $this->cloudflaredService->start();
-                    break;
+                    Log::info('Tunnel start requested', [
+                        'user_id' => auth()->id(),
+                        'timestamp' => now()
+                    ]);
+                    
+                    $success = $this->cloudflaredService->start();
+                    
+                    Log::info('Tunnel start result', [
+                        'success' => $success,
+                        'user_id' => auth()->id()
+                    ]);
+                    
+                    return response()->json([
+                        'success' => $success,
+                        'message' => $success ? 'Tunnel started successfully' : 'Failed to start tunnel',
+                        'status' => $this->cloudflaredService->getStatus()
+                    ]);
+                    
                 case 'stop':
-                    $result = $this->cloudflaredService->stop();
-                    break;
-                case 'restart':
-                    $result = $this->cloudflaredService->restart();
-                    break;
+                    Log::info('Tunnel stop requested', [
+                        'user_id' => auth()->id(),
+                        'timestamp' => now()
+                    ]);
+                    
+                    $success = $this->cloudflaredService->stop();
+                    
+                    Log::info('Tunnel stop result', [
+                        'success' => $success,
+                        'user_id' => auth()->id()
+                    ]);
+                    
+                    return response()->json([
+                        'success' => $success,
+                        'message' => $success ? 'Tunnel stopped successfully' : 'Failed to stop tunnel',
+                        'status' => $this->cloudflaredService->getStatus()
+                    ]);
+                    
+                case 'status':
                 default:
-                    return response()->json(['error' => 'Invalid action'], 400);
+                    return response()->json([
+                        'success' => true,
+                        'status' => $this->cloudflaredService->getStatus()
+                    ]);
+            }
+        } catch (\Exception $e) {
+            Log::error('Tunnel control failed', ['error' => $e->getMessage()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Error: ' . $e->getMessage(),
+                'status' => ['running' => false, 'message' => 'Error checking status']
+            ], 500);
+        }
+    }
+
+    public function authenticate()
+    {
+        Log::info('E-factura authentication initiated', [
+            'user_id' => auth()->id(),
+            'timestamp' => now()
+        ]);
+        
+        // Ensure cloudflared is running before OAuth (only when needed)
+        if (!$this->cloudflaredService->isRunning()) {
+            $startResult = $this->cloudflaredService->start();
+            if (!$startResult) {
+                return response()->json(['error' => 'Failed to start tunnel. Please start it manually.'], 500);
+            }
+        }
+        
+        $credential = AnafCredential::active()->first();
+
+        if (!$credential) {
+            return response()->json(['error' => 'No active ANAF credentials found'], 400);
+        }
+
+        // Create OAuth service with correct environment
+        $oauthService = new \App\Services\AnafOAuthService($credential->environment);
+        
+        $authUrl = $oauthService->getAuthorizationUrl(
+            $credential->client_id,
+            $credential->redirect_uri
+        );
+
+        return response()->json(['auth_url' => $authUrl]);
+    }
+
+    public function callback(Request $request)
+    {
+        $code = $request->get('code');
+        $error = $request->get('error');
+        $errorDescription = $request->get('error_description');
+        $state = $request->get('state');
+
+        // Log all callback parameters for debugging
+        Log::info('OAuth callback received', [
+            'code' => $code ? 'present' : 'missing',
+            'error' => $error,
+            'error_description' => $errorDescription,
+            'state' => $state,
+            'all_params' => $request->all()
+        ]);
+
+        // Verify state parameter for CSRF protection
+        if ($state !== session('oauth_state')) {
+            Log::error('OAuth state parameter mismatch', [
+                'received_state' => $state,
+                'session_state' => session('oauth_state')
+            ]);
+            return redirect()->route('efactura.index')->with('error', 'Invalid state parameter - possible CSRF attack');
+        }
+
+        if ($error) {
+            Log::error('OAuth callback error', [
+                'error' => $error,
+                'error_description' => $errorDescription
+            ]);
+            return redirect()->route('efactura.index')->with('error', 'Authentication failed: ' . $error . ($errorDescription ? ' - ' . $errorDescription : ''));
+        }
+
+        if (!$code) {
+            return redirect()->route('efactura.index')->with('error', 'No authorization code received');
+        }
+
+        try {
+            $credential = AnafCredential::active()->first();
+
+            if (!$credential) {
+                return redirect()->route('efactura.index')->with('error', 'No active credentials found');
             }
 
-            return response()->json([
-                'success' => $result,
-                'action' => $action,
-                'status' => $this->cloudflaredService->getStatus()
-            ]);
+            // Create OAuth service with correct environment
+            $oauthService = new \App\Services\AnafOAuthService($credential->environment);
+
+            // Exchange code for tokens
+            $tokenData = $oauthService->exchangeCodeForToken(
+                $code,
+                $credential->client_id,
+                $credential->client_secret,
+                $credential->redirect_uri
+            );
+
+            // Use the new token service to generate and store tokens securely
+            $result = $this->tokenService->generateToken($code);
+
+            return redirect()->route('efactura.index')->with('success', 'Successfully authenticated with ANAF. Token expires in ' . $result['days_until_expiry'] . ' days.');
 
         } catch (\Exception $e) {
-            Log::error('Tunnel control failed', [
-                'action' => $request->get('action'),
-                'error' => $e->getMessage()
-            ]);
-            return response()->json(['error' => $e->getMessage()], 500);
+            Log::error('OAuth callback failed', ['error' => $e->getMessage()]);
+            return redirect()->route('efactura.index')->with('error', 'Authentication failed: ' . $e->getMessage());
+        }
+    }
+
+    public function status()
+    {
+        // Don't check tunnel status on every status call - too slow
+        // Only start tunnel when actually needed (during authenticate)
+        
+        $credential = AnafCredential::active()->first();
+        $token = $credential ? EfacturaToken::forClientId($credential->client_id)->active()->first() : null;
+        
+        // Build token status from existing token system  
+        if ($token && $token->isValid()) {
+            $daysUntilExpiry = max(0, now()->diffInDays($token->expires_at, false));
+            $daysSinceIssued = $token->created_at->diffInDays(now());
+            $canRefresh = $daysSinceIssued >= 90;
+            
+            $status = 'active';
+            $message = "Token active, expires in {$daysUntilExpiry} days.";
+            
+            if ($daysUntilExpiry <= 7) {
+                $status = 'expiring_soon';
+                $message = "⚠️ Token expires in {$daysUntilExpiry} days!";
+            } elseif ($daysUntilExpiry <= 30) {
+                $status = 'expiring_warning';
+                $message = "Token expires in {$daysUntilExpiry} days.";
+            }
+            
+            $tokenStatus = [
+                'has_token' => true,
+                'status' => $status,
+                'token_id' => 'eft_' . substr(md5($token->id), 0, 8),
+                'issued_at' => $token->created_at->toISOString(),
+                'expires_at' => $token->expires_at->toISOString(),
+                'days_until_expiry' => $daysUntilExpiry,
+                'days_since_issued' => $daysSinceIssued,
+                'can_refresh' => $canRefresh,
+                'days_until_refresh' => $canRefresh ? 0 : (90 - $daysSinceIssued),
+                'usage_count' => 0,
+                'last_used_at' => $token->updated_at->toISOString(),
+                'message' => $message,
+            ];
+        } else {
+            $tokenStatus = [
+                'has_token' => false,
+                'status' => 'no_token',
+                'message' => 'No active token available.'
+            ];
+        }
+
+        return response()->json([
+            'hasCredentials' => (bool) $credential,
+            'tokenStatus' => $tokenStatus,
+            'tunnelStatus' => $this->cloudflaredService->getStatus()
+        ]);
+    }
+
+    private function startTunnelAsync(): void
+    {
+        // Start tunnel in background without blocking the response
+        if (file_exists(base_path('cloudflared/e.py'))) {
+            $command = "cd /d \"" . base_path('cloudflared') . "\" && start /B python e.py";
+            shell_exec($command . ' > NUL 2>&1 &');
         }
     }
 
     public function refreshToken()
     {
         try {
-            $this->tokenService->refreshTokenIfNeeded();
-            return response()->json(['success' => true]);
+            $result = $this->tokenService->refreshToken();
+            
+            return response()->json([
+                'success' => true,
+                'message' => 'Token refreshed successfully. New token expires in ' . $result['days_until_expiry'] . ' days.',
+                'tokenStatus' => $this->tokenService->getTokenStatus()
+            ]);
         } catch (\Exception $e) {
             Log::error('Token refresh failed', ['error' => $e->getMessage()]);
-            return response()->json(['error' => $e->getMessage()], 500);
+            return response()->json(['error' => $e->getMessage()], 400);
         }
     }
 
@@ -278,6 +425,8 @@ class EfacturaController extends Controller
     public function revoke()
     {
         try {
+            // Note: This is for backwards compatibility
+            // New tokens should be marked as compromised instead for proper audit trail
             $this->oauthService->revokeToken();
             return response()->json(['success' => true]);
         } catch (\Exception $e) {
@@ -287,154 +436,108 @@ class EfacturaController extends Controller
     }
 
     /**
-     * Sync messages from ANAF using queued jobs for high-volume processing
+     * Sync messages from ANAF using simple sequential processing
      */
     public function syncMessages(Request $request)
     {
         Log::info('E-factura sync messages initiated', [
             'user_id' => auth()->id(),
             'params' => $request->all(),
-            'timestamp' => now(),
-            'route_name' => $request->route()->getName(),
-            'url' => $request->fullUrl()
-        ]);
-
-        $request->validate([
-            'days' => 'integer|min:1|max:60',
-            'filter' => 'nullable|in:E,T,P,R',
-            'cui' => 'nullable|string',
-            'use_queue' => 'boolean'
+            'timestamp' => now()
         ]);
 
         try {
-            $credential = AnafCredential::active()->first();
-            if (!$credential) {
-                return response()->json(['error' => 'No active ANAF credentials found'], 400);
+            // Check if sync is already running
+            if (Cache::get('really_simple_sync_active', false)) {
+                return response()->json(['error' => 'Sincronizarea este deja în progres. Vă rugăm să așteptați.'], 409);
             }
 
-            $days = $request->get('days', 30);
-            $filter = $request->get('filter');
-            $specificCui = $request->get('cui');
-
-            $endDate = Carbon::now();
-            $startDate = Carbon::now()->subDays($days);
-
-            // Get list of CUIs to sync
-            $cuisToSync = [];
-
-            if ($specificCui) {
-                $cuisToSync[] = $specificCui;
-            } else {
-                $companies = \App\Models\Company::whereNotNull('cui')
-                    ->where('cui', '!=', '')
-                    ->get(['cui', 'denumire']);
-
-                foreach ($companies as $company) {
-                    if (preg_match('/^[0-9]{6,10}$/', $company->cui)) {
-                        $cuisToSync[] = [
-                            'cui' => $company->cui,
-                            'name' => $company->denumire
-                        ];
-                    }
-                }
-
-                // Sort companies by CUI (lowest to highest)
-                usort($cuisToSync, function($a, $b) {
-                    return (int)$a['cui'] <=> (int)$b['cui'];
-                });
+            // Check if we have a valid token
+            $token = EfacturaToken::first();
+            if (!$token || !$token->access_token) {
+                return response()->json(['error' => 'No valid e-factura token found'], 400);
             }
 
-            if (empty($cuisToSync)) {
-                return response()->json([
-                    'error' => 'No valid CUIs found to sync. Please add companies with valid Romanian CUIs first.'
-                ], 400);
-            }
+            // Generate unique sync ID
+            $syncId = \Str::uuid()->toString();
 
-            $useQueue = $request->get('use_queue', true); // Default to queue processing
-            $syncId = Str::uuid()->toString();
+            // Get all companies sorted by CUI (smallest to largest) - MUST be before cache setup
+            $companies = Company::whereNotNull('cui')->orderBy('cui')->get();
+            $totalCompanies = $companies->count();
 
-            if ($useQueue) {
-                Log::info('Dispatching sequential sync job', [
-                    'sync_id' => $syncId,
-                    'total_companies' => count($cuisToSync),
-                    'companies' => array_map(fn($c) => $c['cui'] . ' - ' . $c['name'], $cuisToSync),
-                    'days' => $days,
-                    'filter' => $filter
-                ]);
+            // Clear previous state and start fresh
+            Cache::forget('really_simple_last_cui');
+            Cache::put('really_simple_total_invoices', 0);
+            Cache::put('really_simple_sync_active', true);
+            Cache::put('really_simple_sync_status', 'Se inițiază...');
 
-                // Set initial sync status
-                $initialStatus = [
-                    'is_syncing' => true,
-                    'sync_id' => $syncId,
-                    'status' => 'starting',
-                    'current_company' => 0,
-                    'total_companies' => count($cuisToSync),
-                    'current_invoice' => 0,
-                    'total_invoices_for_company' => 0,
-                    'total_processed' => 0,
-                    'total_errors' => 0,
-                    'test_mode' => false,
-                    'last_update' => now()->toISOString()
-                ];
+            // Set cache for status endpoint (format expected by frontend)
+            Cache::put("efactura_sync_status_{$syncId}", [
+                'is_syncing' => true,
+                'status' => 'starting',
+                'sync_id' => $syncId,
+                'current_company' => 0,
+                'total_companies' => $totalCompanies,
+                'total_processed' => 0,
+                'company_name' => 'Se pregătește...',
+                'message' => 'Se inițiază sincronizarea...',
+                'started_at' => now()->toISOString()
+            ]);
 
-                cache()->put("efactura_sync_status_{$syncId}", $initialStatus, 3600);
+            // Also set general status for compatibility
+            Cache::put('efactura_sync_status', [
+                'is_syncing' => true,
+                'status' => 'starting',
+                'current_company' => 0,
+                'total_companies' => $totalCompanies,
+                'total_processed' => 0,
+                'company_name' => 'Se pregătește...',
+                'message' => 'Se inițiază sincronizarea...'
+            ]);
 
-                // Also store generic sync status for frontend polling
-                cache()->put("efactura_sync_status", $initialStatus, 3600);
+            // Run sync in background using PowerShell for better Windows compatibility
+            $cuiList = $companies->pluck('cui')->toArray();
+            $cuiListString = implode(',', $cuiList);
 
-                // Dispatch simple atomic job
-                \App\Jobs\SimpleEfacturaSync::dispatch(
-                    $syncId,
-                    $days
-                )->onQueue('efactura-sync');
+            $escapedSyncId = escapeshellarg($syncId);
+            $escapedCuiList = escapeshellarg($cuiListString);
+            $escapedToken = escapeshellarg($token->access_token);
 
-                Log::info('Sequential job dispatched', [
-                    'sync_id' => $syncId,
-                    'total_companies' => count($cuisToSync)
-                ]);
+            $command = "powershell -Command \"Start-Process -FilePath 'C:/Users/TheOldBuffet/.config/herd/bin/php83.bat' " .
+                       "-ArgumentList 'artisan', 'efactura:sync-live', {$escapedSyncId}, {$escapedCuiList}, {$escapedToken} " .
+                       "-WorkingDirectory '" . base_path() . "' -WindowStyle Hidden -NoNewWindow\"";
 
-                return response()->json([
-                    'success' => true,
-                    'sync_id' => $syncId,
-                    'message' => "Sequential sync started. Processing " . count($cuisToSync) . " companies one by one.",
-                    'total_companies' => count($cuisToSync),
-                    'processing_mode' => 'sequential',
-                    'job_dispatched' => true,
-                    'note' => 'Production mode: 4 second delays between invoices'
-                ]);
+            Log::info('Executing background command', ['command' => $command]);
 
-            } else {
-                // Process immediately in background using async dispatch
-                Log::info('Starting immediate background sync', [
-                    'sync_id' => $syncId,
-                    'total_companies' => count($cuisToSync)
-                ]);
+            $output = [];
+            $return_var = 0;
+            exec($command, $output, $return_var);
 
-                // Set initial sync status
-                $initialStatus = [
-                    'is_syncing' => true,
-                    'sync_id' => $syncId,
-                    'status' => 'starting',
-                    'current_company' => 0,
-                    'total_companies' => count($cuisToSync),
-                    'current_invoice' => 0,
-                    'total_invoices_for_company' => 0,
-                    'total_processed' => 0,
-                    'total_errors' => 0,
-                    'test_mode' => false,
-                    'last_update' => now()->toISOString()
-                ];
+            Log::info('Command execution result', [
+                'return_code' => $return_var,
+                'output' => $output
+            ]);
 
-                cache()->put("efactura_sync_status_{$syncId}", $initialStatus, 3600);
-                cache()->put("efactura_sync_status", $initialStatus, 3600);
+            Log::info('Live sync job dispatched', [
+                'sync_id' => $syncId,
+                'total_companies' => $totalCompanies
+            ]);
 
-                return response()->json([
-                    'error' => 'Queue processing is required for reliable background execution.'
-                ], 400);
-            }
+            return response()->json([
+                'success' => true,
+                'sync_id' => $syncId,
+                'message' => 'Sincronizarea în timp real a început cu succes',
+                'background_sync' => true,
+                'total_companies' => $totalCompanies
+            ]);
 
         } catch (\Exception $e) {
             Log::error('Message sync failed', ['error' => $e->getMessage()]);
+
+            // Clear status on error
+            Cache::put('really_simple_sync_active', false);
+            Cache::put('really_simple_sync_status', 'Error: ' . $e->getMessage());
+
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }
@@ -447,9 +550,25 @@ class EfacturaController extends Controller
         $syncId = $request->get('sync_id');
 
         if ($syncId) {
+            // Get specific sync status
             $status = cache()->get("efactura_sync_status_{$syncId}");
         } else {
+            // Get legacy sync status (for backward compatibility)
             $status = cache()->get('efactura_sync_status');
+        }
+
+        // If no status found, check the really simple sync status
+        if (!$status) {
+            $isActive = Cache::get('really_simple_sync_active', false);
+            $simpleStatus = Cache::get('really_simple_sync_status', 'idle');
+
+            if ($isActive) {
+                $status = [
+                    'is_syncing' => true,
+                    'status' => 'running',
+                    'message' => $simpleStatus
+                ];
+            }
         }
 
         return response()->json($status ?: [
@@ -459,9 +578,6 @@ class EfacturaController extends Controller
         ]);
     }
 
-    /**
-     * Download an invoice as PDF - generated on demand only
-     */
     public function downloadPDF(Request $request)
     {
         Log::info('E-factura PDF download requested', [
@@ -480,122 +596,28 @@ class EfacturaController extends Controller
                 return response()->json(['error' => 'Invoice not found'], 404);
             }
 
-            // Check if PDF already exists
-            if ($invoice->pdf_content) {
-                $pdfContent = base64_decode($invoice->pdf_content);
-                return response($pdfContent, 200, [
-                    'Content-Type' => 'application/pdf',
-                    'Content-Disposition' => 'attachment; filename="factura_' . $invoice->invoice_number . '.pdf"'
-                ]);
+            // Generate PDF and return it for download
+            $pdfData = base64_decode($invoice->pdf_content ?? '');
+
+            if (empty($pdfData)) {
+                return response()->json(['error' => 'PDF content not available for this invoice'], 400);
             }
 
-            // Generate PDF from XML using ANAF API
-            if (!$invoice->xml_content) {
-                return response()->json(['error' => 'No XML content available for PDF conversion'], 400);
-            }
-
-            // Detect standard type from XML
-            $standard = 'FACT1'; // Default
-            if (strpos($invoice->xml_content, 'urn:cen.eu:en16931') !== false) {
-                $standard = 'FCN';
-            }
-
-            $pdfContent = $this->efacturaService->convertXmlToPdf($invoice->xml_content, $standard, false);
-
-            if (!$pdfContent) {
-                return response()->json(['error' => 'Failed to convert XML to PDF'], 500);
-            }
-
-            // Store PDF in database for future requests
-            $invoice->update([
-                'pdf_content' => base64_encode($pdfContent),
-                'pdf_generated_at' => now()
-            ]);
-
-            return response($pdfContent, 200, [
+            return response($pdfData, 200, [
                 'Content-Type' => 'application/pdf',
-                'Content-Disposition' => 'attachment; filename="factura_' . $invoice->invoice_number . '.pdf"'
+                'Content-Disposition' => 'attachment; filename="factura-' . ($invoice->invoice_number ?? $invoice->download_id) . '.pdf"',
+                'Content-Length' => strlen($pdfData)
             ]);
 
         } catch (\Exception $e) {
-            Log::error('PDF download failed', [
-                'invoice_id' => $request->invoice_id,
-                'error' => $e->getMessage()
-            ]);
+            Log::error('Message sync failed', ['error' => $e->getMessage()]);
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }
 
-    /**
-     * Generate PDF for an invoice without downloading it
-     */
-    public function generatePDF(Request $request)
-    {
-        Log::info('E-factura PDF generation requested', [
-            'user_id' => auth()->id(),
-            'invoice_id' => $request->invoice_id,
-            'timestamp' => now()
-        ]);
-
-        $request->validate([
-            'invoice_id' => 'required|string'
-        ]);
-
-        try {
-            $invoice = EfacturaInvoice::where('_id', $request->invoice_id)->first();
-            if (!$invoice) {
-                return response()->json(['error' => 'Invoice not found'], 404);
-            }
-
-            // Check if PDF already exists
-            if ($invoice->pdf_content) {
-                return response()->json([
-                    'success' => true,
-                    'message' => 'PDF already generated',
-                    'generated_at' => $invoice->pdf_generated_at
-                ]);
-            }
-
-            // Generate PDF from XML using ANAF API
-            if (!$invoice->xml_content) {
-                return response()->json(['error' => 'No XML content available for PDF conversion'], 400);
-            }
-
-            // Detect standard type from XML
-            $standard = 'FACT1'; // Default
-            if (strpos($invoice->xml_content, 'urn:cen.eu:en16931') !== false) {
-                $standard = 'FCN';
-            }
-
-            $pdfContent = $this->efacturaService->convertXmlToPdf($invoice->xml_content, $standard, false);
-
-            if (!$pdfContent) {
-                return response()->json(['error' => 'Failed to convert XML to PDF'], 500);
-            }
-
-            // Store PDF in database
-            $invoice->update([
-                'pdf_content' => base64_encode($pdfContent),
-                'pdf_generated_at' => now()
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'PDF generated successfully',
-                'generated_at' => now()->toISOString()
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('PDF generation failed', [
-                'invoice_id' => $request->invoice_id,
-                'error' => $e->getMessage()
-            ]);
-            return response()->json(['error' => $e->getMessage()], 500);
-        }
-    }
 
     /**
-     * View XML content of an invoice
+     * View invoice XML
      */
     public function viewXML(Request $request)
     {
@@ -630,211 +652,151 @@ class EfacturaController extends Controller
     /**
      * Clear all invoices from database
      */
-    public function clearDatabase()
+    public function clearDatabase(Request $request)
     {
+        Log::warning('E-factura database clear requested', [
+            'user_id' => auth()->id(),
+            'timestamp' => now()
+        ]);
+        
         try {
             $count = EfacturaInvoice::count();
             EfacturaInvoice::truncate();
-
-            Log::info('E-factura database cleared', [
-                'user_id' => auth()->id(),
-                'deleted_count' => $count,
-                'timestamp' => now()
+            
+            Log::info('E-factura database cleared', ['deleted_count' => $count]);
+            
+            return response()->json([
+                'success' => true,
+                'message' => "Baza de date a fost golită. {$count} facturi șterse.",
+                'deleted_count' => $count
             ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to clear e-factura database', ['error' => $e->getMessage()]);
+            return response()->json(['error' => 'Eroare la ștergerea bazei de date: ' . $e->getMessage()], 500);
+        }
+    }
+
+
+    /**
+     * Generate PDF from invoice XML
+     */
+    public function generatePDF(Request $request)
+    {
+        $request->validate([
+            'invoice_id' => 'required|string'
+        ]);
+
+        try {
+            $invoice = EfacturaInvoice::where('_id', $request->invoice_id)->first();
+            if (!$invoice) {
+                return response()->json(['error' => 'Invoice not found'], 404);
+            }
+
+            // Check if PDF already exists
+            if ($invoice->pdf_content) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'PDF already exists',
+                    'has_pdf' => true
+                ]);
+            }
+
+            // Generate PDF from XML
+            if (!$invoice->xml_content) {
+                return response()->json(['error' => 'No XML content available for PDF conversion'], 400);
+            }
+
+            // Detect standard type from XML
+            $standard = 'FACT1'; // Default
+            if (strpos($invoice->xml_content, 'urn:cen.eu:en16931') !== false) {
+                $standard = 'FCN';
+            }
+
+            $pdfContent = $this->efacturaService->convertXmlToPdf($invoice->xml_content, $standard, false);
+
+            if (!$pdfContent) {
+                return response()->json(['error' => 'Failed to convert XML to PDF'], 500);
+            }
+
+            // Save PDF content for future use (as base64)
+            $invoice->update(['pdf_content' => base64_encode($pdfContent)]);
 
             return response()->json([
                 'success' => true,
-                'message' => "Database cleared successfully. {$count} invoices deleted."
+                'message' => 'PDF generated successfully',
+                'has_pdf' => true
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Database clear failed', ['error' => $e->getMessage()]);
+            Log::error('PDF generation failed', [
+                'invoice_id' => $request->invoice_id,
+                'error' => $e->getMessage()
+            ]);
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }
 
     /**
-     * Get recent invoices for the frontend table
+     * Get recent invoices for real-time updates
      */
     public function getRecentInvoices(Request $request)
     {
         try {
-            $limit = $request->get('limit', 20);
-            $offset = $request->get('offset', 0);
+            $since = $request->get('since'); // ISO timestamp to get invoices created after
+            $limit = $request->get('limit', 50);
 
-            $invoices = EfacturaInvoice::orderBy('archived_at', 'desc')
-                ->skip($offset)
-                ->limit($limit)
-                ->get([
-                    '_id',
-                    'cui',
-                    'invoice_number',
-                    'invoice_date',
-                    'supplier_name',
-                    'customer_name',
-                    'total_amount',
-                    'currency',
-                    'status',
-                    'archived_at',
-                    'pdf_generated_at'
-                ]);
-
-            $totalCount = EfacturaInvoice::count();
-
-            return response()->json([
-                'invoices' => $invoices,
-                'total_count' => $totalCount,
-                'has_more' => ($offset + $limit) < $totalCount
+            Log::info('Recent invoices request', [
+                'since' => $since,
+                'limit' => $limit
             ]);
 
+            // Get recent invoices (latest first)
+            $query = EfacturaInvoice::select([
+                '_id', 'cui', 'download_id', 'message_type', 'invoice_number',
+                'invoice_date', 'supplier_name', 'customer_name', 'total_amount',
+                'currency', 'status', 'download_status', 'created_at',
+                'pdf_content', 'xml_errors'
+            ]);
+
+            // If since timestamp provided, get invoices created after that time
+            if ($since) {
+                $query->where('created_at', '>', $since);
+            }
+
+            $invoices = $query->orderBy('created_at', 'desc')
+                ->limit($limit)
+                ->get()
+                ->map(function ($invoice) {
+                    return [
+                        '_id' => $invoice->_id,
+                        'cui' => $invoice->cui,
+                        'download_id' => $invoice->download_id,
+                        'message_type' => $invoice->message_type,
+                        'invoice_number' => $invoice->invoice_number,
+                        'invoice_date' => $invoice->invoice_date,
+                        'supplier_name' => $invoice->supplier_name,
+                        'customer_name' => $invoice->customer_name,
+                        'total_amount' => $invoice->total_amount,
+                        'currency' => $invoice->currency ?? 'RON',
+                        'status' => $invoice->status,
+                        'download_status' => $invoice->download_status,
+                        'created_at' => $invoice->created_at,
+                        'has_pdf' => !empty($invoice->pdf_content),
+                        'has_errors' => !empty($invoice->xml_errors)
+                    ];
+                });
+
+            Log::info('Returning invoices', ['count' => $invoices->count()]);
+
+            return response()->json([
+                'success' => true,
+                'invoices' => $invoices,
+                'count' => $invoices->count()
+            ]);
         } catch (\Exception $e) {
-            Log::error('Get recent invoices failed', ['error' => $e->getMessage()]);
+            Log::error('Error getting recent invoices', ['error' => $e->getMessage()]);
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }
 
-    /**
-     * Get auto-sync configuration
-     */
-    public function getAutoSyncConfig()
-    {
-        $config = EfacturaAutoSync::getConfig();
-
-        return response()->json([
-            'enabled' => $config->enabled,
-            'schedule_time' => $config->schedule_time,
-            'sync_days' => $config->sync_days,
-            'timezone' => $config->timezone,
-            'last_run' => $config->last_run?->toISOString(),
-            'next_run' => $config->next_run?->toISOString(),
-            'status' => $config->status,
-            'last_error' => $config->last_error,
-            'consecutive_failures' => $config->consecutive_failures,
-            'email_reports' => $config->email_reports,
-            'email_recipients' => $config->email_recipients,
-            'last_report' => $config->last_report
-        ]);
-    }
-
-    /**
-     * Update auto-sync configuration
-     */
-    public function updateAutoSyncConfig(Request $request)
-    {
-        $request->validate([
-            'enabled' => 'required|boolean',
-            'schedule_time' => 'required|string|regex:/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/',
-            'sync_days' => 'required|integer|min:1|max:365',
-            'timezone' => 'required|string',
-            'email_reports' => 'boolean',
-            'email_recipients' => 'nullable|string'
-        ]);
-
-        $config = EfacturaAutoSync::getConfig();
-
-        $config->update([
-            'enabled' => $request->enabled,
-            'schedule_time' => $request->schedule_time,
-            'sync_days' => $request->sync_days,
-            'timezone' => $request->timezone,
-            'email_reports' => $request->email_reports ?? true,
-            'email_recipients' => $request->email_recipients
-        ]);
-
-        // Calculate and set next run time
-        if ($config->enabled) {
-            $config->updateNextRun();
-        } else {
-            $config->update(['next_run' => null]);
-        }
-
-        Log::info('Auto-sync configuration updated', [
-            'user_id' => auth()->id(),
-            'enabled' => $config->enabled,
-            'schedule_time' => $config->schedule_time,
-            'next_run' => $config->next_run?->toISOString()
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Auto-sync configuration updated successfully',
-            'config' => [
-                'enabled' => $config->enabled,
-                'schedule_time' => $config->schedule_time,
-                'sync_days' => $config->sync_days,
-                'timezone' => $config->timezone,
-                'next_run' => $config->next_run?->toISOString(),
-                'email_reports' => $config->email_reports,
-                'email_recipients' => $config->email_recipients
-            ]
-        ]);
-    }
-
-    /**
-     * Trigger auto-sync manually
-     */
-    public function triggerAutoSync()
-    {
-        $config = EfacturaAutoSync::getConfig();
-
-        if ($config->status === 'running') {
-            return response()->json([
-                'error' => 'Auto-sync is already running'
-            ], 400);
-        }
-
-        try {
-            // Mark as running
-            $config->markAsRunning();
-
-            // Generate sync ID
-            $syncId = 'manual-web-sync-' . now()->format('Y-m-d-H-i-s');
-
-            // Dispatch the sync job
-            \App\Jobs\SimpleEfacturaSync::dispatch($syncId, $config->sync_days)->onQueue('efactura-sync');
-
-            Log::info('Manual auto-sync triggered', [
-                'user_id' => auth()->id(),
-                'sync_id' => $syncId
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Auto-sync started successfully',
-                'sync_id' => $syncId
-            ]);
-
-        } catch (\Exception $e) {
-            $config->markAsFailed($e->getMessage());
-
-            Log::error('Manual auto-sync failed to start', [
-                'user_id' => auth()->id(),
-                'error' => $e->getMessage()
-            ]);
-
-            return response()->json([
-                'error' => 'Failed to start auto-sync: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Get auto-sync status
-     */
-    public function getAutoSyncStatus()
-    {
-        $config = EfacturaAutoSync::getConfig();
-
-        return response()->json([
-            'status' => $config->status,
-            'enabled' => $config->enabled,
-            'last_run' => $config->last_run?->toISOString(),
-            'next_run' => $config->next_run?->toISOString(),
-            'last_error' => $config->last_error,
-            'consecutive_failures' => $config->consecutive_failures,
-            'last_report' => $config->last_report,
-            'time_until_next_run' => $config->next_run ?
-                now()->diffInSeconds($config->next_run, false) : null
-        ]);
-    }
 }
